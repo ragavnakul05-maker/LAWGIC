@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+ENV/
+*.db
+.pytest_cache/
+
+# Node / Frontend
+node_modules/
+dist/
+.output/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment & IDE
+.env
+.DS_Store
+.vscode/
+.idea/
+
+# Database & Vector DB
+chroma_db/
+backend/chroma_db/
+*.log
+
+# Uploads
+backend/uploads/*.pdf
+backend/uploads/*.docx
+!backend/uploads/ABC_Tech_Supplier_Agreement.txt

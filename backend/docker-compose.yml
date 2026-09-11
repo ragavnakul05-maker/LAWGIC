@@ -1,0 +1,69 @@
+version: "3.9"
+
+services:
+  # ────────────────────────────────────────────────────────
+  # Ollama — serves phi4-mini (LLM) and nomic-embed-text
+  # ────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lawgic_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Pull required models on first start
+    entrypoint: >
+      sh -c "ollama serve &
+             sleep 5 &&
+             ollama pull phi4-mini &&
+             ollama pull nomic-embed-text &&
+             wait"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s   # model download takes time
+
+  # ────────────────────────────────────────────────────────
+  # Lawgic RAG API — FastAPI + LlamaIndex + ChromaDB
+  # ────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lawgic_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/app/chroma_db
+      - uploads_data:/app/data/uploads
+    environment:
+      # Point to the Ollama service
+      OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: phi4-mini
+      EMBED_MODEL: nomic-embed-text
+      # CORS: add your Vercel URL here
+      CORS_ORIGINS: "http://localhost:5173,https://lawgic-phi.vercel.app,https://YOUR_FRONTEND.vercel.app"
+      # Tuning
+      CHUNK_SIZE: "512"
+      CHUNK_OVERLAP: "64"
+      SIMILARITY_TOP_K: "5"
+      LLM_REQUEST_TIMEOUT: "300"
+      MAX_UPLOAD_SIZE_MB: "50"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ollama_data:        # persists downloaded model weights (~3.8 GB for phi4-mini)
+  chroma_data:        # persists vector embeddings
+  uploads_data:       # persists user-uploaded documents

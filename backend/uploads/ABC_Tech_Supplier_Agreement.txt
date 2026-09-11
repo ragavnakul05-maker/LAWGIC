@@ -1,0 +1,28 @@
+MASTER SERVICES AND SUPPLIER AGREEMENT
+
+This Master Services and Supplier Agreement ("Agreement") is entered into as of January 15, 2026, by and between ABC Enterprise Solutions LLC ("Buyer") and Global Tech Logistics Inc. ("Supplier").
+
+--- PAGE 1 ---
+SECTION 1. SCOPE OF SERVICES AND ORDER QUANTITIES
+1.1 Scope. Supplier agrees to manufacture, supply, and deliver specialized technical components in accordance with purchase orders issued by Buyer.
+1.2 Order Quantities & Bulk Discount. Standard pricing applies to orders under 1,000 units. If order quantity exceeds 1,000 units, a 5% volume discount applies to the total contract order value.
+
+--- PAGE 2 ---
+SECTION 2. DELIVERY SCHEDULE AND LIQUIDATED DAMAGES
+2.1 Delivery Timeline. Supplier shall complete delivery of all scheduled goods within 10 days of purchase order confirmation ("Delivery Deadline").
+2.2 Delivery Delay Penalty. If delivery is delayed beyond 10 days, a liquidated damages penalty of 2% of the contract value applies for each applicable week of delay, subject to a maximum penalty cap of 10% of contract value.
+
+--- PAGE 3 ---
+SECTION 3. PAYMENT TERMS AND OVERDUE INTEREST
+3.1 Invoice & Payment Deadline. Buyer shall issue payment within 30 days of invoice receipt.
+3.2 Late Payment Interest. If payment is delayed beyond 30 days, interest of 1.5% per month will be charged on the outstanding invoice balance until fully settled.
+
+--- PAGE 4 ---
+SECTION 4. SERVICE LEVEL AGREEMENT (SLA) & PERFORMANCE
+4.1 System Uptime Requirement. Supplier warrants that the supply telemetry platform shall maintain an operational uptime of at least 99.5% each calendar month.
+4.2 SLA Violation Deduction. If monthly uptime drops below 99.5%, a penalty deduction of $500 per 0.1% uptime incident applies, up to a maximum penalty limit of $5,000 per month.
+
+--- PAGE 5 ---
+SECTION 5. TERM AND RENEWAL
+5.1 Term. This Agreement shall remain in effect for an initial period of one (1) year.
+5.2 Auto-Renewal. This Agreement shall automatically renew for successive one-year terms unless either party provides written notice of non-renewal at least 60 days prior to the expiration of the current term.

@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-800 font-sans antialiased selection:bg-indigo-500 selection:text-white;
+  }
+}
+
+/* Floating realistic gradient orbs animation */
+@keyframes orbFloat1 {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(80px, -60px) scale(1.15);
+  }
+  66% {
+    transform: translate(-40px, 50px) scale(0.95);
+  }
+}
+
+@keyframes orbFloat2 {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1.05);
+  }
+  33% {
+    transform: translate(-70px, 60px) scale(0.9);
+  }
+  66% {
+    transform: translate(60px, -40px) scale(1.1);
+  }
+}
+
+@keyframes orbFloat3 {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(50px, 70px) scale(1.1);
+  }
+  66% {
+    transform: translate(-60px, -50px) scale(0.85);
+  }
+}
+
+.animate-orb-1 {
+  animation: orbFloat1 22s ease-in-out infinite;
+}
+
+.animate-orb-2 {
+  animation: orbFloat2 28s ease-in-out infinite;
+}
+
+.animate-orb-3 {
+  animation: orbFloat3 25s ease-in-out infinite;
+}
+
+/* Glassmorphism card utility - Premium Light Mode */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 4px 20px -2px rgba(148, 163, 184, 0.12), 0 2px 6px -1px rgba(148, 163, 184, 0.08);
+}
+
+.glass-panel-hover {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.glass-panel-hover:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 12px 28px -4px rgba(99, 102, 241, 0.12), 0 4px 10px -2px rgba(148, 163, 184, 0.15);
+  transform: translateY(-2px);
+}
+
+/* Custom scrollbars for light mode */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+.gradient-border {
+  position: relative;
+}
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.4), rgba(6,182,212,0.3), transparent);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
