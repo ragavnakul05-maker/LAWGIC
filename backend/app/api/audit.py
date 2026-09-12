@@ -32,7 +32,11 @@ def get_execution_audit_trail(execution_id: str, db: Session = Depends(get_db), 
     """
     Returns full audit trail for an execution:
     Contract -> Clause -> Rule -> Input -> Execution Steps -> Financial Result -> Source Evidence.
+    Includes plain English legal decompilation for backtracking.
     """
+    from app.services.decompiler_service import DecompilerService
+    from app.models.schemas import LegalIR
+
     ex = db.query(ExecutionModel).filter(ExecutionModel.id == execution_id).first()
     if not ex:
         raise HTTPException(status_code=404, detail="Execution record not found")
@@ -42,8 +46,19 @@ def get_execution_audit_trail(execution_id: str, db: Session = Depends(get_db), 
 
     step_payloads = []
     for s in steps:
-        clause = db.query(ClauseModel).filter(ClauseModel.id == s.source_clause_id).first() if s.source_clause_id else None
         rule = db.query(RuleModel).filter(RuleModel.rule_code == s.rule_code, RuleModel.contract_id == ex.contract_id).first()
+        clause = None
+        if s.source_clause_id:
+            clause = db.query(ClauseModel).filter(ClauseModel.id == s.source_clause_id).first()
+        elif rule and rule.clause_id:
+            clause = db.query(ClauseModel).filter(ClauseModel.id == rule.clause_id).first()
+
+        decompiled_text = None
+        if rule and rule.ir_json:
+            try:
+                decompiled_text = DecompilerService.decompile_to_human(LegalIR(**rule.ir_json))
+            except Exception:
+                decompiled_text = rule.human_explanation
 
         step_payloads.append({
             "step_number": s.step_number,
@@ -61,6 +76,7 @@ def get_execution_audit_trail(execution_id: str, db: Session = Depends(get_db), 
             } if clause else None,
             "rule_ir": rule.ir_json if rule else None,
             "human_explanation": rule.human_explanation if rule else None,
+            "decompiled_text": decompiled_text,
         })
 
     return {
