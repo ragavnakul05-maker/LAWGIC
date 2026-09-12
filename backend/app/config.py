@@ -17,6 +17,7 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 CHROMA_DIR = BASE_DIR / "chroma_db"
 
 # Ensure runtime directories exist
+STATUTES_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 

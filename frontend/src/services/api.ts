@@ -208,3 +208,9 @@ export async function searchRAGStatutoryLaws(query: string): Promise<any> {
   if (!res.ok) throw new Error('RAG search failed');
   return res.json();
 }
+
+export async function fetchPenaltyBreakdown(): Promise<any> {
+  const res = await authFetch(`${API_BASE}/dashboard/breakdown`);
+  if (!res.ok) throw new Error('Failed to fetch penalty breakdown');
+  return res.json();
+}

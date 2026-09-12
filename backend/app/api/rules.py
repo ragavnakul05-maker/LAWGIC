@@ -1,8 +1,13 @@
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.models.schemas import RuleModel, ClauseModel, LegalIR, RuleExecutionInput, RuleExecutionOutput
+from app.core.security import get_current_user
+from app.models.schemas import (
+    RuleModel, ClauseModel, LegalIR, RuleExecutionInput, RuleExecutionOutput,
+    ExecutionModel, ExecutionStepModel, UserModel,
+)
 from app.services.rule_validation_engine import RuleValidationEngine
 from app.services.deterministic_rule_engine import DeterministicRuleEngine
 from app.services.decompiler_service import DecompilerService
@@ -11,7 +16,7 @@ from app.services.audit_service import AuditService
 router = APIRouter(prefix="/rules", tags=["Rules"])
 
 @router.get("")
-def list_all_rules(rule_type: Optional[str] = None, validation_status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_all_rules(rule_type: Optional[str] = None, validation_status: Optional[str] = None, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     query = db.query(RuleModel)
     if rule_type:
         query = query.filter(RuleModel.rule_type == rule_type)
@@ -43,7 +48,7 @@ def list_all_rules(rule_type: Optional[str] = None, validation_status: Optional[
     return res
 
 @router.get("/{rule_id}")
-def get_rule_detail(rule_id: str, db: Session = Depends(get_db)):
+def get_rule_detail(rule_id: str, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     r = db.query(RuleModel).filter(RuleModel.id == rule_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
@@ -69,7 +74,7 @@ def get_rule_detail(rule_id: str, db: Session = Depends(get_db)):
     }
 
 @router.post("/{rule_id}/validate")
-def validate_rule(rule_id: str, db: Session = Depends(get_db)):
+def validate_rule(rule_id: str, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     r = db.query(RuleModel).filter(RuleModel.id == rule_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
@@ -91,21 +96,50 @@ def validate_rule(rule_id: str, db: Session = Depends(get_db)):
     return val_res
 
 @router.post("/execute", response_model=RuleExecutionOutput)
-def execute_contract_rules(input_data: RuleExecutionInput, db: Session = Depends(get_db)):
+def execute_contract_rules(input_data: RuleExecutionInput, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     """
     Executes rules deterministically against input variables using pure Python calculations.
+    Results are persisted to the database so the Audit trail is complete.
     """
     rules_rec = db.query(RuleModel).filter(RuleModel.contract_id == input_data.contract_id).all()
     if not rules_rec:
         raise HTTPException(status_code=404, detail=f"No rules found for contract {input_data.contract_id}")
 
     legal_ir_list = [LegalIR(**r.ir_json) for r in rules_rec]
-    
+
     exec_output = DeterministicRuleEngine.execute_rules(
         contract_id=input_data.contract_id,
         rules=legal_ir_list,
         variables=input_data.variables
     )
+
+    # Fix 5a: Persist execution record so Audit trail works for real-time executions
+    exec_rec = ExecutionModel(
+        id=exec_output.execution_id,
+        contract_id=input_data.contract_id,
+        scenario_name="Rule Execution",
+        input_variables=input_data.variables,
+        financial_impact=exec_output.total_financial_impact,
+        summary_result=exec_output.summary,
+        executed_at=datetime.utcnow(),
+    )
+    db.add(exec_rec)
+
+    for step in exec_output.calculation_steps:
+        step_rec = ExecutionStepModel(
+            id=f"STEP-{exec_output.execution_id}-{step.step_number}",
+            execution_id=exec_output.execution_id,
+            step_number=step.step_number,
+            rule_code=step.rule_code,
+            title=step.title,
+            description=step.description,
+            formula=step.formula,
+            subtotal=step.subtotal,
+            source_clause_id=None,  # no direct clause DB link in this context
+        )
+        db.add(step_rec)
+
+    db.commit()
 
     AuditService.log_event(
         db=db,

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Code2, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { RuleSummary } from '../types';
 
@@ -9,9 +9,17 @@ interface RuleEditorModalProps {
 }
 
 export const RuleEditorModal: React.FC<RuleEditorModalProps> = ({ rule, onClose, onValidate }) => {
-  if (!rule) return null;
+  // Fix 2: useState must be called before any early return (Rules of Hooks).
+  // Initialise to '' and sync via useEffect whenever rule changes.
+  const [jsonContent, setJsonContent] = useState('');
 
-  const [jsonContent, setJsonContent] = useState(JSON.stringify(rule.ir_json, null, 2));
+  useEffect(() => {
+    if (rule) {
+      setJsonContent(JSON.stringify(rule.ir_json, null, 2));
+    }
+  }, [rule]);
+
+  if (!rule) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">

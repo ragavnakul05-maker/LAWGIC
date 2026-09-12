@@ -166,6 +166,13 @@ export const AuditPage: React.FC = () => {
                         </button>
                       </div>
                     )}
+
+                    {s.human_explanation && (
+                      <div className="mt-2 p-2.5 rounded-lg bg-indigo-50 border border-indigo-100">
+                        <p className="text-xs font-semibold text-indigo-700 mb-0.5">📖 Plain English</p>
+                        <p className="text-xs text-indigo-800">{s.human_explanation}</p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

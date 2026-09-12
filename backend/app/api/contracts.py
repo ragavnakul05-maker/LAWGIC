@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.config import settings
-from app.models.schemas import ContractModel, ContractPageModel, ClauseModel, RuleModel
+from app.core.security import get_current_user
+from app.models.schemas import ContractModel, ContractPageModel, ClauseModel, RuleModel, UserModel
 from app.services.document_parser import DocumentService
 from app.services.llm_service import LLMService
 from app.services.rule_validation_engine import RuleValidationEngine
@@ -16,7 +17,7 @@ from app.services.audit_service import AuditService
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
 
 @router.post("/upload")
-async def upload_contract(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_contract(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     """
     Uploads contract document (PDF, DOCX, TXT), parses text, segments clauses, and extracts Legal IR.
     """
@@ -134,7 +135,7 @@ async def upload_contract(file: UploadFile = File(...), db: Session = Depends(ge
     }
 
 @router.get("")
-def list_contracts(db: Session = Depends(get_db)):
+def list_contracts(db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     contracts = db.query(ContractModel).order_by(ContractModel.created_at.desc()).all()
     res = []
     for c in contracts:
@@ -154,7 +155,7 @@ def list_contracts(db: Session = Depends(get_db)):
     return res
 
 @router.get("/{contract_id}")
-def get_contract_detail(contract_id: str, db: Session = Depends(get_db)):
+def get_contract_detail(contract_id: str, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     c = db.query(ContractModel).filter(ContractModel.id == contract_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="Contract not found")

@@ -21,6 +21,7 @@ export const ContractDetailPage: React.FC<ContractDetailPageProps> = ({ contract
   const [selectedRuleForModal, setSelectedRuleForModal] = useState<RuleSummary | null>(null);
   const [executionResult, setExecutionResult] = useState<RuleExecutionOutput | null>(null);
   const [executing, setExecuting] = useState(false);
+  const [showGeneralClauses, setShowGeneralClauses] = useState(false);
 
   // Input Variables Sandbox State
   const [variables, setVariables] = useState({
@@ -143,37 +144,54 @@ export const ContractDetailPage: React.FC<ContractDetailPageProps> = ({ contract
         <div className="col-span-4 border-r border-slate-200 p-4 overflow-y-auto space-y-4 bg-slate-50/30">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Extracted Contract Clauses</h3>
-            <span className="text-xs text-indigo-600 font-mono font-bold">{contract.clauses.length} Clauses</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowGeneralClauses(v => !v)}
+                className={`text-xs px-2 py-1 rounded-lg border font-medium transition-colors ${
+                  showGeneralClauses
+                    ? 'bg-slate-200 text-slate-700 border-slate-300'
+                    : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {showGeneralClauses ? 'Hide General Clauses' : 'Show General Clauses'}
+              </button>
+              <span className="text-xs text-indigo-600 font-mono font-bold">{contract.clauses.length} Clauses</span>
+            </div>
           </div>
 
           <div className="space-y-4">
-            {contract.clauses.map((c) => (
-              <ClauseCard
-                key={c.id}
-                clause={c}
-                onViewRule={(cl) => {
-                  if (cl.rule) {
-                    setSelectedRuleForModal({
-                      id: cl.rule.id,
-                      contract_id: contract.id,
-                      clause_id: cl.id,
-                      rule_code: cl.rule.rule_code,
-                      rule_type: cl.clause_type,
-                      title: cl.rule.title,
-                      ir_json: cl.rule.ir_json,
-                      validation_status: cl.rule.validation_status,
-                      review_notes: cl.rule.review_notes,
-                      human_explanation: cl.rule.human_explanation,
-                      created_at: '',
-                      source: { page: cl.page_number, section: cl.section_number, clause_text: cl.original_text }
-                    });
-                  }
-                }}
-                onValidate={handleValidate}
-                onSimulate={(cl) => onSimulate(contract.id, variables)}
-                onShowEvidence={(cl) => setSelectedClauseForEvidence(cl)}
-              />
-            ))}
+            {(() => {
+              const displayedClauses = (contract.clauses || []).filter((cl: any) =>
+                showGeneralClauses || !['general_clause', 'renewal_condition', 'termination_condition'].includes(cl.clause_type)
+              );
+              return displayedClauses.map((c) => (
+                <ClauseCard
+                  key={c.id}
+                  clause={c}
+                  onViewRule={(cl) => {
+                    if (cl.rule) {
+                      setSelectedRuleForModal({
+                        id: cl.rule.id,
+                        contract_id: contract.id,
+                        clause_id: cl.id,
+                        rule_code: cl.rule.rule_code,
+                        rule_type: cl.clause_type,
+                        title: cl.rule.title,
+                        ir_json: cl.rule.ir_json,
+                        validation_status: cl.rule.validation_status,
+                        review_notes: cl.rule.review_notes,
+                        human_explanation: cl.rule.human_explanation,
+                        created_at: '',
+                        source: { page: cl.page_number, section: cl.section_number, clause_text: cl.original_text }
+                      });
+                    }
+                  }}
+                  onValidate={handleValidate}
+                  onSimulate={(cl) => onSimulate(contract.id, variables)}
+                  onShowEvidence={(cl) => setSelectedClauseForEvidence(cl)}
+                />
+              ));
+            })()}
           </div>
         </div>
 

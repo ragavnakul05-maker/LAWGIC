@@ -1,0 +1,9 @@
+ISO/IEC 19086-2: CLOUD COMPUTING SERVICE LEVEL AGREEMENT (SLA) FRAMEWORK
+
+Metric & Penalty Guidelines for Service Availability:
+1. Availability Percentage = (Total Time - Downtime) / Total Time * 100
+2. Service Credits: If Availability falls below agreed threshold (e.g., 99.9%), cloud service provider shall issue service credit deductions according to schedule:
+   - 99.0% to 99.8%: 5% service credit of monthly invoice
+   - 95.0% to 98.9%: 10% service credit of monthly invoice
+   - Below 95.0%: 25% service credit of monthly invoice
+3. Incident Cap: Cumulative SLA penalty deductions per billing period shall not exceed 30% of total monthly recurring charges (MRC).

@@ -3,7 +3,7 @@ import {
   FileText, Cpu, ShieldAlert, AlertTriangle, TrendingDown, TrendingUp, CheckCircle, Bell, ArrowRight, Sparkles, Activity
 } from 'lucide-react';
 import { MetricCard } from '../components/MetricCard';
-import { fetchDashboardSummary } from '../services/api';
+import { fetchDashboardSummary, fetchPenaltyBreakdown } from '../services/api';
 import { DashboardMetrics, ContractSummary, AlertItem } from '../types';
 
 interface DashboardPageProps {
@@ -15,6 +15,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
   const [recentContracts, setRecentContracts] = useState<ContractSummary[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showBreakdown, setShowBreakdown] = useState<'penalties' | 'discounts' | null>(null);
+  const [breakdown, setBreakdown] = useState<any[]>([]);
+  const [breakdownLoading, setBreakdownLoading] = useState(false);
 
   useEffect(() => {
     fetchDashboardSummary()
@@ -30,6 +33,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
       });
   }, []);
 
+  const handleOpenBreakdown = async (type: 'penalties' | 'discounts') => {
+    setShowBreakdown(type);
+    setBreakdownLoading(true);
+    try {
+      const data = await fetchPenaltyBreakdown();
+      setBreakdown(data.contracts || []);
+    } catch (e) {
+      setBreakdown([]);
+    } finally {
+      setBreakdownLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-8 text-center space-y-4">
@@ -40,6 +56,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
   }
 
   return (
+    <>
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
       {/* KPI Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -76,7 +93,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
 
       {/* Secondary Financial Impact Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <div className="glass-panel p-5 rounded-2xl flex items-center justify-between border border-rose-200/80 bg-gradient-to-r from-rose-50/50 to-white">
+        <div
+          className="glass-panel p-5 rounded-2xl flex items-center justify-between border border-rose-200/80 bg-gradient-to-r from-rose-50/50 to-white cursor-pointer hover:shadow-lg transition-shadow"
+          onClick={() => handleOpenBreakdown('penalties')}
+        >
           <div>
             <span className="text-xs font-semibold text-rose-600 uppercase tracking-wider block">Potential Delay Penalties</span>
             <span className="text-2xl font-extrabold text-slate-900">${metrics?.potential_penalties.toLocaleString()}</span>
@@ -87,7 +107,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        <div className="glass-panel p-5 rounded-2xl flex items-center justify-between border border-emerald-200/80 bg-gradient-to-r from-emerald-50/50 to-white">
+        <div
+          className="glass-panel p-5 rounded-2xl flex items-center justify-between border border-emerald-200/80 bg-gradient-to-r from-emerald-50/50 to-white cursor-pointer hover:shadow-lg transition-shadow"
+          onClick={() => handleOpenBreakdown('discounts')}
+        >
           <div>
             <span className="text-xs font-semibold text-emerald-700 uppercase tracking-wider block">Potential Volume Discounts</span>
             <span className="text-2xl font-extrabold text-slate-900">${metrics?.potential_discounts.toLocaleString()}</span>
@@ -178,5 +201,101 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
         </div>
       </div>
     </div>
+
+      {showBreakdown && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowBreakdown(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">
+                  {showBreakdown === 'penalties' ? '⚠️ Penalty Breakdown by Contract' : '✅ Discount Breakdown by Contract'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">Click a contract to see individual rules and source clauses</p>
+              </div>
+              <button onClick={() => setShowBreakdown(null)} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">×</button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="overflow-y-auto max-h-[70vh]">
+              {breakdownLoading ? (
+                <div className="p-10 text-center">
+                  <div className="inline-block w-6 h-6 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+                  <p className="text-sm text-slate-500">Loading breakdown...</p>
+                </div>
+              ) : breakdown.filter((c: any) => showBreakdown === 'penalties' ? c.total_penalties > 0 : c.total_discounts > 0).length === 0 ? (
+                <div className="p-10 text-center text-slate-400">
+                  <p className="font-medium">No data yet.</p>
+                  <p className="text-xs mt-1">Execute rules on contracts first using the IR Studio.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {breakdown
+                    .filter((c: any) => showBreakdown === 'penalties' ? c.total_penalties > 0 : c.total_discounts > 0)
+                    .map((c: any) => {
+                      const relevantRules = (c.rules || []).filter((r: any) =>
+                        showBreakdown === 'penalties'
+                          ? (r.latest_impact ?? 0) > 0
+                          : (r.latest_impact ?? 0) < 0
+                      );
+                      return (
+                        <div key={c.id} className="p-4">
+                          {/* Contract header */}
+                          <div className="flex items-center justify-between mb-3">
+                            <div>
+                              <p className="font-bold text-slate-900 text-sm">{c.title}</p>
+                              <p className="text-xs text-slate-400 font-mono">{c.id} · {c.execution_count} execution{c.execution_count !== 1 ? 's' : ''}</p>
+                            </div>
+                            <div className={`text-lg font-extrabold font-mono ${showBreakdown === 'penalties' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                              ${showBreakdown === 'penalties'
+                                ? c.total_penalties.toLocaleString()
+                                : c.total_discounts.toLocaleString()}
+                            </div>
+                          </div>
+
+                          {/* Per-rule rows */}
+                          {relevantRules.length > 0 ? (
+                            <div className="space-y-2">
+                              {relevantRules.map((r: any) => (
+                                <div key={r.rule_code} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-xs font-mono font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">{r.rule_code}</span>
+                                        <span className="text-xs font-semibold text-slate-800">{r.title}</span>
+                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${r.validation_status === 'VALID' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{r.validation_status}</span>
+                                      </div>
+                                      {r.human_explanation && (
+                                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">{r.human_explanation}</p>
+                                      )}
+                                      {r.source_clause?.text && (
+                                        <div className="mt-1.5 flex items-start gap-1.5">
+                                          <span className="text-[10px] font-semibold text-slate-400 shrink-0 mt-0.5">§{r.source_clause.section} p.{r.source_clause.page}</span>
+                                          <p className="text-[10px] text-slate-500 italic leading-relaxed">&ldquo;{r.source_clause.text}&rdquo;</p>
+                                        </div>
+                                      )}
+                                    </div>
+                                    {r.latest_impact !== null && (
+                                      <div className={`shrink-0 font-mono font-bold text-sm ${r.latest_impact > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                        {r.latest_impact < 0 ? '-' : '+'}${Math.abs(r.latest_impact).toLocaleString()}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-400 italic">No individual rule data — run execution to see per-rule breakdown.</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };

@@ -2,12 +2,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.models.schemas import ExecutionModel, ExecutionStepModel, AuditLogModel, ContractModel, ClauseModel, RuleModel
+from app.core.security import get_current_user
+from app.models.schemas import ExecutionModel, ExecutionStepModel, AuditLogModel, ContractModel, ClauseModel, RuleModel, UserModel
 
 router = APIRouter(prefix="/audit", tags=["Audit"])
 
 @router.get("/logs")
-def get_audit_logs(contract_id: Optional[str] = None, limit: int = 50, db: Session = Depends(get_db)):
+def get_audit_logs(contract_id: Optional[str] = None, limit: int = 50, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     query = db.query(AuditLogModel)
     if contract_id:
         query = query.filter(AuditLogModel.contract_id == contract_id)
@@ -27,7 +28,7 @@ def get_audit_logs(contract_id: Optional[str] = None, limit: int = 50, db: Sessi
     return res
 
 @router.get("/executions/{execution_id}")
-def get_execution_audit_trail(execution_id: str, db: Session = Depends(get_db)):
+def get_execution_audit_trail(execution_id: str, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
     """
     Returns full audit trail for an execution:
     Contract -> Clause -> Rule -> Input -> Execution Steps -> Financial Result -> Source Evidence.
@@ -58,7 +59,8 @@ def get_execution_audit_trail(execution_id: str, db: Session = Depends(get_db)):
                 "title": clause.title if clause else "Clause",
                 "original_text": clause.original_text if clause else ""
             } if clause else None,
-            "rule_ir": rule.ir_json if rule else None
+            "rule_ir": rule.ir_json if rule else None,
+            "human_explanation": rule.human_explanation if rule else None,
         })
 
     return {

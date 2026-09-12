@@ -16,15 +16,15 @@ class DecompilerService:
         action_str_list = []
         for a in rule.actions:
             if a.type == "interest":
-                action_str_list.append(f"assess a monthly interest penalty of {a.rate * 100:.1f}% on the invoice amount")
+                action_str_list.append(f"assess a monthly interest penalty of {(a.rate or 0) * 100:.1f}% on the invoice amount")
             elif a.type == "penalty":
-                action_str_list.append(f"charge a liquidated damages penalty of {a.rate * 100:.1f}% per week on total contract value")
+                action_str_list.append(f"charge a liquidated damages penalty of {(a.rate or 0) * 100:.1f}% per week on total contract value")
             elif a.type == "discount":
-                action_str_list.append(f"grant a volume price discount of {a.rate * 100:.1f}%")
+                action_str_list.append(f"grant a volume price discount of {(a.rate or 0) * 100:.1f}%")
             elif a.type == "sla_deduction":
-                action_str_list.append(f"deduct a fixed penalty of ${a.amount:,.2f} per SLA breach incident")
+                action_str_list.append(f"deduct a fixed penalty of ${(a.amount or 0):,.2f} per SLA breach incident")
             elif a.type == "escalation":
-                action_str_list.append(f"increase pricing by {a.rate * 100:.1f}% for inflation adjustment")
+                action_str_list.append(f"increase pricing by {(a.rate or 0) * 100:.1f}% for inflation adjustment")
             else:
                 action_str_list.append(a.description or "apply contractual adjustment")
 
