@@ -152,3 +152,24 @@ async def get_current_user(
         )
 
     return user
+
+
+# ---------------------------------------------------------------------------
+# Password Reset Token Utilities
+# ---------------------------------------------------------------------------
+
+def hash_reset_token(raw_token: str) -> str:
+    """Computes SHA-256 digest of a raw password reset token."""
+    return hashlib.sha256(raw_token.strip().encode("utf-8")).hexdigest()
+
+
+def generate_reset_token() -> tuple[str, str]:
+    """
+    Generates a cryptographically secure random token (256 bits of entropy)
+    and its SHA-256 hash for database storage.
+    Returns: (raw_token, token_hash)
+    """
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hash_reset_token(raw_token)
+    return raw_token, token_hash
+

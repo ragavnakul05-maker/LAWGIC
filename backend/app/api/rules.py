@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.schemas import (
-    RuleModel, ClauseModel, LegalIR, RuleExecutionInput, RuleExecutionOutput,
+    RuleModel, ClauseModel, ContractModel, LegalIR, RuleExecutionInput, RuleExecutionOutput,
     ExecutionModel, ExecutionStepModel, UserModel,
 )
 from app.services.rule_validation_engine import RuleValidationEngine
@@ -17,7 +17,12 @@ router = APIRouter(prefix="/rules", tags=["Rules"])
 
 @router.get("")
 def list_all_rules(rule_type: Optional[str] = None, validation_status: Optional[str] = None, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
-    query = db.query(RuleModel)
+    user_contracts = db.query(ContractModel.id).filter(ContractModel.user_id == current_user.id).all()
+    user_contract_ids = [c[0] for c in user_contracts]
+    if not user_contract_ids:
+        return []
+
+    query = db.query(RuleModel).filter(RuleModel.contract_id.in_(user_contract_ids))
     if rule_type:
         query = query.filter(RuleModel.rule_type == rule_type)
     if validation_status:
@@ -52,6 +57,9 @@ def get_rule_detail(rule_id: str, db: Session = Depends(get_db), current_user: U
     r = db.query(RuleModel).filter(RuleModel.id == rule_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
+    contract = db.query(ContractModel).filter(ContractModel.id == r.contract_id, ContractModel.user_id == current_user.id).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Rule not found")
     clause = db.query(ClauseModel).filter(ClauseModel.id == r.clause_id).first()
 
     return {
@@ -78,6 +86,9 @@ def validate_rule(rule_id: str, db: Session = Depends(get_db), current_user: Use
     r = db.query(RuleModel).filter(RuleModel.id == rule_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
+    contract = db.query(ContractModel).filter(ContractModel.id == r.contract_id, ContractModel.user_id == current_user.id).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Rule not found")
 
     ir_obj = LegalIR(**r.ir_json)
     val_res = RuleValidationEngine.validate_rule(ir_obj)
@@ -90,7 +101,8 @@ def validate_rule(rule_id: str, db: Session = Depends(get_db), current_user: Use
         db=db,
         contract_id=r.contract_id,
         action="VALIDATE_RULE",
-        details={"rule_id": r.id, "rule_code": r.rule_code, "status": val_res.status, "issues": val_res.issues}
+        details={"rule_id": r.id, "rule_code": r.rule_code, "status": val_res.status, "issues": val_res.issues},
+        user_id=current_user.id
     )
 
     return val_res
@@ -101,6 +113,13 @@ def execute_contract_rules(input_data: RuleExecutionInput, db: Session = Depends
     Executes rules deterministically against input variables using pure Python calculations.
     Results are persisted to the database so the Audit trail is complete.
     """
+    contract = db.query(ContractModel).filter(
+        ContractModel.id == input_data.contract_id,
+        ContractModel.user_id == current_user.id
+    ).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail=f"Contract {input_data.contract_id} not found")
+
     rules_rec = db.query(RuleModel).filter(RuleModel.contract_id == input_data.contract_id).all()
     if not rules_rec:
         raise HTTPException(status_code=404, detail=f"No rules found for contract {input_data.contract_id}")
@@ -113,10 +132,11 @@ def execute_contract_rules(input_data: RuleExecutionInput, db: Session = Depends
         variables=input_data.variables
     )
 
-    # Fix 5a: Persist execution record so Audit trail works for real-time executions
+    # Persist execution record with user_id so Audit trail works for real-time executions
     exec_rec = ExecutionModel(
         id=exec_output.execution_id,
         contract_id=input_data.contract_id,
+        user_id=current_user.id,
         scenario_name="Rule Execution",
         input_variables=input_data.variables,
         financial_impact=exec_output.total_financial_impact,
@@ -149,7 +169,8 @@ def execute_contract_rules(input_data: RuleExecutionInput, db: Session = Depends
             "execution_id": exec_output.execution_id,
             "financial_impact": exec_output.total_financial_impact,
             "applied_rules": exec_output.applied_rules
-        }
+        },
+        user_id=current_user.id
     )
 
     return exec_output

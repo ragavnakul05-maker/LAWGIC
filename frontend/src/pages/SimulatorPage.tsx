@@ -1,677 +1,714 @@
-import React, { useState, useEffect } from 'react';
-import { Sliders, Play, Sparkles, Plus, Trash2, BarChart2, CheckCircle, MessageSquare, ArrowRight, Zap, FileText, Info } from 'lucide-react';
-import { runSimulation, fetchContracts, fetchContractDetail } from '../services/api';
-import { SimulationResponse, ContractDetail } from '../types';
-import { ScenarioComparisonTable } from '../components/ScenarioComparisonTable';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Play, RefreshCw, AlertCircle, RotateCcw, Download, ChevronDown, FileSpreadsheet, FileCode, Printer
+} from 'lucide-react';
+import {
+  fetchContracts, fetchContractSimulatorSchema, compareContractSimulation, exportSimulationReport
+} from '../services/api';
+import {
+  ContractSimulatorSchemaResponse, ContractSimulationComparisonResponse,
+  ContractRuleComparisonResult
+} from '../types';
+import { formatINR, formatINRImpact as formatImpact } from '../utils/currency';
 
 interface SimulatorPageProps {
   defaultContractId?: string;
 }
 
-// Map rule types to their primary variables for dynamic UI filtering
-const RULE_TYPE_VARIABLE_MAP: Record<string, string[]> = {
-  late_payment_interest: ['invoice_amount', 'payment_delay_days'],
-  delivery_delay_penalty: ['contract_value', 'delivery_delay_days'],
-  volume_discount: ['contract_value', 'order_quantity'],
-  sla_penalty: ['invoice_amount', 'sla_uptime_percent'],
-  price_escalation: ['contract_value', 'inflation_rate_percent']
+interface AggregatedCategoryResult {
+  key: string;
+  parameterLabel: string;
+  unit: string;
+  originalParameterValue: any;
+  whatIfParameterValue: any;
+  originalResult: number;
+  whatIfResult: number;
+  difference: number;
+  section1Label: string;
+  section5Category: string;
+  rulesCount: number;
+}
+
+// Canonical category mapper & rule aggregator
+const aggregateRulesByCategory = (
+  rules: ContractRuleComparisonResult[] = [],
+  originalVars: Record<string, any> = {},
+  whatIfVars: Record<string, any> = {}
+): AggregatedCategoryResult[] => {
+  const categoryMap = new Map<string, AggregatedCategoryResult>();
+
+  for (const rule of rules) {
+    let key = rule.parameter_name;
+    let paramLabel = rule.parameter_label;
+    let unit = rule.unit || '';
+    let s1Label = 'Total Result';
+    let s5Category = 'Result';
+
+    // Map to canonical Legal IR semantic identity
+    if (rule.parameter_name === 'delivery_delay_days' || rule.rule_type === 'delivery_delay_penalty') {
+      key = 'delivery_delay_days';
+      paramLabel = 'Delivery Delay';
+      unit = 'days';
+      s1Label = 'Total Delivery Penalty';
+      s5Category = 'Delivery Penalty';
+    } else if (rule.parameter_name === 'payment_delay_days' || rule.rule_type === 'late_payment_interest') {
+      key = 'payment_delay_days';
+      paramLabel = 'Payment Delay';
+      unit = 'days';
+      s1Label = 'Total Interest';
+      s5Category = 'Interest';
+    } else if (rule.parameter_name === 'order_quantity' || rule.rule_type === 'volume_discount') {
+      key = 'order_quantity';
+      paramLabel = 'Order Quantity';
+      unit = 'units';
+      s1Label = 'Total Discount';
+      s5Category = 'Discount';
+    } else if (rule.parameter_name === 'sla_uptime_percent' || rule.rule_type === 'sla_penalty') {
+      key = 'sla_uptime_percent';
+      paramLabel = 'SLA Uptime';
+      unit = '%';
+      s1Label = 'Total SLA Deduction';
+      s5Category = 'SLA Deduction';
+    } else if (rule.parameter_name === 'inflation_rate_percent' || rule.rule_type === 'price_escalation') {
+      key = 'inflation_rate_percent';
+      paramLabel = 'Annual Inflation Rate';
+      unit = '%';
+      s1Label = 'Total Price Adjustment';
+      s5Category = 'Price Adjustment';
+    } else {
+      key = rule.parameter_name || rule.rule_type;
+      paramLabel = rule.parameter_label || rule.rule_title;
+      unit = rule.unit || '';
+      s1Label = `Total ${paramLabel}`;
+      s5Category = paramLabel;
+    }
+
+    const origParamVal = originalVars[key] !== undefined ? originalVars[key] : rule.original_parameter_value;
+    const whatIfParamVal = whatIfVars[key] !== undefined ? whatIfVars[key] : (rule.what_if_parameter_value ?? origParamVal);
+
+    if (!categoryMap.has(key)) {
+      categoryMap.set(key, {
+        key,
+        parameterLabel: paramLabel,
+        unit,
+        originalParameterValue: origParamVal,
+        whatIfParameterValue: whatIfParamVal,
+        originalResult: rule.original_result,
+        whatIfResult: rule.what_if_result,
+        difference: rule.difference,
+        section1Label: s1Label,
+        section5Category: s5Category,
+        rulesCount: 1,
+      });
+    } else {
+      const existing = categoryMap.get(key)!;
+      existing.originalResult = Math.round((existing.originalResult + rule.original_result) * 100) / 100;
+      existing.whatIfResult = Math.round((existing.whatIfResult + rule.what_if_result) * 100) / 100;
+      existing.difference = Math.round((existing.whatIfResult - existing.originalResult) * 100) / 100;
+      existing.rulesCount += 1;
+    }
+  }
+
+  return Array.from(categoryMap.values());
 };
 
 export const SimulatorPage: React.FC<SimulatorPageProps> = ({ defaultContractId = 'DEMO-CONTRACT-001' }) => {
   const [contractId, setContractId] = useState(defaultContractId);
   const [contracts, setContracts] = useState<any[]>([]);
-  const [selectedContract, setSelectedContract] = useState<ContractDetail | null>(null);
-  const [loadingContract, setLoadingContract] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [simulationResult, setSimulationResult] = useState<SimulationResponse | null>(null);
+  const [schema, setSchema] = useState<ContractSimulatorSchemaResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Natural Language Prompt State
-  const [nlQuery, setNlQuery] = useState('');
-  const [nlParseNotice, setNlParseNotice] = useState<string | null>(null);
+  // Original contract baseline variables
+  const [originalVars, setOriginalVars] = useState<Record<string, any>>({});
 
-  // Baseline variable inputs
-  const [baselineVars, setBaselineVars] = useState<Record<string, any>>({
-    contract_value: 1000000.0,
-    invoice_amount: 1000000.0,
-    payment_delay_days: 0,
-    delivery_delay_days: 0,
-    order_quantity: 500,
-    sla_uptime_percent: 100.0,
-    inflation_rate_percent: 0.0
-  });
+  // What-If modified variables (editable by user)
+  const [whatIfVars, setWhatIfVars] = useState<Record<string, any>>({});
 
-  // Dynamic Scenarios List
-  const [scenariosInput, setScenariosInput] = useState<Array<{ scenario_name: string; variable_overrides: Record<string, any> }>>([
-    {
-      scenario_name: 'Scenario 1: Delivery Delay (20 Days)',
-      variable_overrides: { delivery_delay_days: 20 }
-    },
-    {
-      scenario_name: 'Scenario 2: Severe Delay (40 Days)',
-      variable_overrides: { delivery_delay_days: 40 }
-    }
-  ]);
+  // Original Contract Simulation results (Baseline)
+  const [baselineComparison, setBaselineComparison] = useState<ContractSimulationComparisonResponse | null>(null);
 
-  // Active variables needed by the current contract's rules
-  const [activeVariableKeys, setActiveVariableKeys] = useState<string[]>([
-    'contract_value', 'invoice_amount', 'delivery_delay_days', 'payment_delay_days'
-  ]);
+  // What-If Simulation results (after user clicks Simulate)
+  const [whatIfComparison, setWhatIfComparison] = useState<ContractSimulationComparisonResponse | null>(null);
 
-  // Load contract list on mount
+  // Export State
+  const [exportOpen, setExportOpen] = useState<boolean>(false);
+  const [exporting, setExporting] = useState<boolean>(false);
+
+  // Load uploaded contracts on mount
   useEffect(() => {
     fetchContracts().then(data => {
       setContracts(data);
-      if (data.length > 0 && !defaultContractId) {
-        setContractId(data[0].id);
+      if (data && data.length > 0) {
+        if (!data.some((c: any) => c.id === contractId)) {
+          setContractId(data[0].id);
+        }
       }
-    }).catch(console.error);
+    }).catch(err => {
+      console.error('Failed to load contracts:', err);
+    });
   }, []);
 
-  // Load contract detail whenever selected contract changes
+  // When contractId changes, load parameters & baseline simulation results
   useEffect(() => {
     if (!contractId) return;
-    setLoadingContract(true);
-    fetchContractDetail(contractId)
-      .then(detail => {
-        setSelectedContract(detail);
-        setLoadingContract(false);
-        adaptSimulatorToContract(detail);
-      })
-      .catch(err => {
-        console.error('Failed to load contract detail', err);
-        setLoadingContract(false);
-      });
+    loadContractData(contractId);
   }, [contractId]);
 
-  const adaptSimulatorToContract = (contract: ContractDetail) => {
-    const rules = (contract.clauses || []).map(c => c.rule).filter(Boolean);
-    const ruleTypes = rules.map(r => r?.ir_json?.type).filter(Boolean) as string[];
+  const loadContractData = async (id: string) => {
+    setLoading(true);
+    setError(null);
+    setWhatIfComparison(null);
 
-    // Extract all relevant variable keys for this contract's rules
-    const keysSet = new Set<string>(['contract_value', 'invoice_amount']);
-    ruleTypes.forEach(rt => {
-      const vars = RULE_TYPE_VARIABLE_MAP[rt] || [];
-      vars.forEach(v => keysSet.add(v));
-    });
-    const relevantKeys = Array.from(keysSet);
-    setActiveVariableKeys(relevantKeys);
-
-    // Initialise baseline variables for relevant keys
-    const newVars: Record<string, any> = {
-      contract_value: 1000000.0,
-      invoice_amount: 1000000.0,
-      payment_delay_days: 0,
-      delivery_delay_days: 0,
-      order_quantity: 500,
-      sla_uptime_percent: 100.0,
-      inflation_rate_percent: 0.0
-    };
-
-    // Smart default scenarios tailored to the contract's specific rules
-    const defaultScenarios: Array<{ scenario_name: string; variable_overrides: Record<string, any> }> = [];
-
-    if (ruleTypes.includes('delivery_delay_penalty')) {
-      newVars.delivery_delay_days = 5;
-      defaultScenarios.push(
-        { scenario_name: 'Scenario A: 15 Days Delivery Delay', variable_overrides: { delivery_delay_days: 15 } },
-        { scenario_name: 'Scenario B: 35 Days Severe Delay (Capped)', variable_overrides: { delivery_delay_days: 35 } }
-      );
-    }
-
-    if (ruleTypes.includes('late_payment_interest')) {
-      newVars.payment_delay_days = 10;
-      defaultScenarios.push(
-        { scenario_name: 'Scenario C: 45 Days Late Payment', variable_overrides: { payment_delay_days: 45 } }
-      );
-    }
-
-    if (ruleTypes.includes('volume_discount')) {
-      newVars.order_quantity = 800;
-      defaultScenarios.push(
-        { scenario_name: 'Scenario D: 1,500 Units Bulk Tier Discount', variable_overrides: { order_quantity: 1500 } }
-      );
-    }
-
-    if (ruleTypes.includes('sla_penalty')) {
-      newVars.sla_uptime_percent = 99.8;
-      defaultScenarios.push(
-        { scenario_name: 'Scenario E: SLA Breach (98.5% Uptime)', variable_overrides: { sla_uptime_percent: 98.5 } }
-      );
-    }
-
-    if (ruleTypes.includes('price_escalation')) {
-      newVars.inflation_rate_percent = 1.5;
-      defaultScenarios.push(
-        { scenario_name: 'Scenario F: High Inflation (4.5% CPI)', variable_overrides: { inflation_rate_percent: 4.5 } }
-      );
-    }
-
-    if (defaultScenarios.length === 0) {
-      defaultScenarios.push(
-        { scenario_name: 'Scenario A: 20 Days Delay', variable_overrides: { delivery_delay_days: 20 } },
-        { scenario_name: 'Scenario B: 40 Days Delay', variable_overrides: { delivery_delay_days: 40 } }
-      );
-    }
-
-    setBaselineVars(newVars);
-    setScenariosInput(defaultScenarios);
-    setSimulationResult(null);
-  };
-
-  // Natural Language Query Parser
-  const handleParseNLQuery = () => {
-    if (!nlQuery.trim()) return;
-
-    const lower = nlQuery.toLowerCase();
-    const overrides: Record<string, any> = {};
-    const extractedDetails: string[] = [];
-
-    // Extract numbers with context
-    // 1. Delivery delay days
-    const delMatch = lower.match(/(?:delivery|deliver|delayed|delay|late by)\s*(?:is|by|of)?\s*(\d+)\s*(?:days|day)?/i) ||
-                     lower.match(/(\d+)\s*(?:days|day)\s*(?:delivery|delay|delayed)/i);
-    if (delMatch) {
-      const val = parseInt(delMatch[1]);
-      overrides.delivery_delay_days = val;
-      extractedDetails.push(`Delivery Delay: ${val} Days`);
-    }
-
-    // 2. Payment delay days
-    const payMatch = lower.match(/(?:payment|paid|invoice|late payment)\s*(?:is|by|of|late by)?\s*(\d+)\s*(?:days|day)?/i) ||
-                     lower.match(/(\d+)\s*(?:days|day)\s*(?:payment|late payment)/i);
-    if (payMatch) {
-      const val = parseInt(payMatch[1]);
-      overrides.payment_delay_days = val;
-      extractedDetails.push(`Payment Delay: ${val} Days`);
-    }
-
-    // 3. Order quantity
-    const qtyMatch = lower.match(/(?:quantity|order|units|volume|bulk)\s*(?:of|is|=)?\s*(\d[\d,]*)\s*(?:units|pcs)?/i) ||
-                     lower.match(/(\d[\d,]*)\s*(?:units|pcs|quantity)/i);
-    if (qtyMatch) {
-      const val = parseInt(qtyMatch[1].replace(/,/g, ''));
-      overrides.order_quantity = val;
-      extractedDetails.push(`Order Quantity: ${val.toLocaleString()} Units`);
-    }
-
-    // 4. SLA Uptime percent
-    const slaMatch = lower.match(/(?:sla|uptime|availability)\s*(?:is|of|falls to|at)?\s*(\d+(?:\.\d+)?)\s*%/i) ||
-                     lower.match(/(\d+(?:\.\d+)?)\s*%\s*(?:sla|uptime|availability)/i);
-    if (slaMatch) {
-      const val = parseFloat(slaMatch[1]);
-      overrides.sla_uptime_percent = val;
-      extractedDetails.push(`SLA Uptime: ${val}%`);
-    }
-
-    // 5. Inflation rate percent
-    const infMatch = lower.match(/(?:inflation|cpi|price increase)\s*(?:is|of|at)?\s*(\d+(?:\.\d+)?)\s*%/i) ||
-                     lower.match(/(\d+(?:\.\d+)?)\s*%\s*(?:inflation|cpi)/i);
-    if (infMatch) {
-      const val = parseFloat(infMatch[1]);
-      overrides.inflation_rate_percent = val;
-      extractedDetails.push(`Inflation Rate: ${val}%`);
-    }
-
-    if (Object.keys(overrides).length === 0) {
-      setNlParseNotice('Could not extract parameters. Try phrasing like: "What if delivery is delayed by 25 days and order quantity is 1500 units?"');
-      return;
-    }
-
-    // Create new scenario from parsed prompt
-    const scenarioTitle = `Custom Prompt: "${nlQuery.length > 35 ? nlQuery.substring(0, 32) + '...' : nlQuery}"`;
-    const newScenarios = [
-      ...scenariosInput,
-      { scenario_name: scenarioTitle, variable_overrides: overrides }
-    ];
-
-    setScenariosInput(newScenarios);
-    setNlParseNotice(`Extracted parameters: ${extractedDetails.join(', ')}. Added as new scenario!`);
-
-    // Auto-trigger simulation run
-    runSimulation(contractId, baselineVars, newScenarios)
-      .then(res => setSimulationResult(res))
-      .catch(console.error);
-  };
-
-  const handleRunSimulation = async () => {
-    setRunning(true);
     try {
-      const res = await runSimulation(contractId, baselineVars, scenariosInput);
-      setSimulationResult(res);
-      setRunning(false);
-    } catch (err: any) {
-      alert(`Simulation Error: ${err.message || err}`);
-      setRunning(false);
-    }
-  };
+      // 1. Fetch dynamic contract schema
+      const schemaData = await fetchContractSimulatorSchema(id);
+      setSchema(schemaData);
 
-  // Scenario management functions
-  const addScenario = () => {
-    const nextNum = scenariosInput.length + 1;
-    setScenariosInput([
-      ...scenariosInput,
-      {
-        scenario_name: `Scenario ${nextNum}: Custom Test`,
-        variable_overrides: { delivery_delay_days: 25 }
+      const baseline = schemaData.baseline_variables || {};
+      setOriginalVars(baseline);
+      setWhatIfVars({ ...baseline });
+
+      // 2. Automatically calculate Original Contract Scenario results using deterministic engine
+      try {
+        const baselineRes = await compareContractSimulation(id, baseline, baseline);
+        setBaselineComparison(baselineRes);
+      } catch (calcErr: any) {
+        console.warn('Could not pre-calculate baseline simulation:', calcErr);
+        setBaselineComparison(null);
       }
-    ]);
-  };
-
-  const removeScenario = (index: number) => {
-    if (scenariosInput.length <= 1) {
-      alert('Simulation requires at least one scenario.');
-      return;
+    } catch (err: any) {
+      console.error('Failed to load contract parameters:', err);
+      setError(err.message || 'Failed to load parameters for this contract.');
+      setSchema(null);
+      setBaselineComparison(null);
+      setOriginalVars({});
+      setWhatIfVars({});
+    } finally {
+      setLoading(false);
     }
-    setScenariosInput(scenariosInput.filter((_, i) => i !== index));
   };
 
-  const updateScenarioName = (index: number, name: string) => {
-    const updated = [...scenariosInput];
-    updated[index].scenario_name = name;
-    setScenariosInput(updated);
+  // Run What-If Simulation using existing deterministic rule engine
+  const handleSimulate = async () => {
+    if (!contractId || !schema) return;
+    setSimulating(true);
+    setError(null);
+
+    try {
+      const res = await compareContractSimulation(contractId, whatIfVars, originalVars);
+      setWhatIfComparison(res);
+    } catch (err: any) {
+      console.error('What-If simulation error:', err);
+      setError(err.message || 'Failed to run simulation.');
+    } finally {
+      setSimulating(false);
+    }
   };
 
-  const updateScenarioOverride = (index: number, key: string, val: any) => {
-    const updated = [...scenariosInput];
-    updated[index].variable_overrides = {
-      ...updated[index].variable_overrides,
-      [key]: val
-    };
-    setScenariosInput(updated);
+  // Reset What-If variables to match original contract values
+  const handleReset = () => {
+    setWhatIfVars({ ...originalVars });
+    setWhatIfComparison(null);
   };
 
-  const contractRules = (selectedContract?.clauses || []).map(c => ({
-    clause_section: c.section_number,
-    clause_title: c.title,
-    rule: c.rule
-  })).filter(item => item.rule);
+  // Export simulation comparison report
+  const handleExport = async (format: 'html' | 'csv' | 'json') => {
+    if (!whatIfComparison) return;
+    try {
+      setExporting(true);
+      await exportSimulationReport(whatIfComparison, format);
+    } catch (err: any) {
+      console.error('Export failed:', err);
+      alert(err.message || 'Failed to export simulation report');
+    } finally {
+      setExporting(false);
+      setExportOpen(false);
+    }
+  };
+
+  const selectedContract = contracts.find(c => c.id === contractId);
+
+  // Deduplicate parameters strictly by canonical variable_name
+  const allParams = schema?.parameters || [];
+  const uniqueParams = useMemo(() => {
+    const map = new Map<string, typeof allParams[0]>();
+    for (const p of allParams) {
+      if (!map.has(p.variable_name)) {
+        map.set(p.variable_name, p);
+      }
+    }
+    return Array.from(map.values());
+  }, [allParams]);
+
+  const uniqueBaseParams = uniqueParams.filter(
+    p => p.variable_name === 'contract_value' || p.variable_name === 'invoice_amount'
+  );
+  const uniqueOperationalParams = uniqueParams.filter(
+    p => p.variable_name !== 'contract_value' && p.variable_name !== 'invoice_amount'
+  );
+
+  // Aggregated original contract rules (Section 1)
+  const aggregatedBaseline = useMemo(() => {
+    if (!baselineComparison?.rules) return [];
+    return aggregateRulesByCategory(baselineComparison.rules, originalVars, originalVars);
+  }, [baselineComparison, originalVars]);
+
+  // Aggregated what-if simulation results (Section 5 Result)
+  const aggregatedWhatIf = useMemo(() => {
+    if (!whatIfComparison?.rules) return [];
+    return aggregateRulesByCategory(whatIfComparison.rules, originalVars, whatIfVars);
+  }, [whatIfComparison, originalVars, whatIfVars]);
 
   return (
-    <div className="p-8 space-y-8 max-w-7xl mx-auto">
-      {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="p-6 md:p-10 max-w-4xl mx-auto space-y-8">
+      {/* Clean Contract Selector Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <Sliders className="w-6 h-6 text-indigo-600" />
-            What-If Scenario Financial Simulator
-          </h2>
-          <p className="text-xs text-slate-500 font-medium mt-0.5">
-            Parameters adapt dynamically per contract rules. Combine <strong>Natural Language Queries</strong> or <strong>Direct Numerical Overrides</strong>.
-          </p>
+          <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 block">
+            What-If Simulator
+          </span>
+          <h1 className="text-xl font-bold text-slate-900">
+            {selectedContract ? selectedContract.title : 'Select a Contract'}
+          </h1>
         </div>
 
-        {/* Contract Selection Dropdown */}
-        <div className="glass-panel p-3 rounded-2xl flex items-center gap-3 border border-indigo-100 bg-white shadow-xs">
-          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">Target Contract:</label>
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-bold text-slate-600 shrink-0">Contract:</label>
           <select
             value={contractId}
             onChange={e => setContractId(e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold bg-slate-50 text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 min-w-[240px]"
+            disabled={loading || simulating}
+            className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
           >
             {contracts.length === 0 ? (
               <option value={contractId}>{contractId}</option>
             ) : (
               contracts.map((c: any) => (
-                <option key={c.id} value={c.id}>{c.title} ({c.id})</option>
+                <option key={c.id} value={c.id}>
+                  {c.title} ({c.id})
+                </option>
               ))
             )}
           </select>
+          {loading && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />}
         </div>
       </div>
 
-      {/* Contract Rules & Parameters Banner */}
-      {selectedContract && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-indigo-600" />
-              Active Contract Legal IR Rules ({contractRules.length})
-            </h3>
-            <span className="text-[11px] font-mono text-slate-500">Parameters adapt automatically to this contract</span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {contractRules.map((item, idx) => {
-              const r = item.rule;
-              if (!r) return null;
-              return (
-                <div key={idx} className="p-3.5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
-                      {r.rule_code}
-                    </span>
-                    <span className="text-[10px] font-mono font-semibold text-slate-500">§{item.clause_section}</span>
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900">{r.title}</h4>
-                    <p className="text-[11px] text-slate-600 mt-0.5 line-clamp-2 leading-relaxed">{r.human_explanation}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+      {/* Error Alert */}
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+          <span>{error}</span>
         </div>
       )}
 
-      {/* Natural Language What-If Prompt Box */}
-      <div className="glass-panel p-5 rounded-2xl border border-indigo-200/80 bg-gradient-to-r from-indigo-50/50 via-white to-cyan-50/30 space-y-3 shadow-xs">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-bold text-slate-900 flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-indigo-600" />
-            Natural Language What-If Query
-          </label>
-          <span className="text-[11px] text-slate-500">e.g. &ldquo;What if delivery is delayed by 25 days and payment is 30 days late?&rdquo;</span>
+      {/* ============================================================ */}
+      {/* SECTION 1: CONTRACT SIMULATION (ORIGINAL / ACTUAL SCENARIO) */}
+      {/* ============================================================ */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-xs space-y-6">
+        <div className="border-b border-slate-100 pb-4">
+          <h2 className="text-base font-extrabold text-slate-900 uppercase tracking-wider">
+            1. Contract Simulation
+          </h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Current uploaded contract scenario with unique actionable terms and aggregated calculated results.
+          </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="relative flex-1">
-            <input
-              type="text"
-              value={nlQuery}
-              onChange={e => setNlQuery(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleParseNLQuery()}
-              placeholder="Type in plain language: 'What if delivery is late by 30 days and volume is 1500 units?'"
-              className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 font-medium shadow-xs"
-            />
+        {loading ? (
+          <div className="py-8 text-center text-xs text-slate-500 space-y-2">
+            <RefreshCw className="w-5 h-5 animate-spin mx-auto text-indigo-600" />
+            <p>Evaluating contract rules and calculating baseline scenario...</p>
           </div>
-          <button
-            onClick={handleParseNLQuery}
-            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-600/20 whitespace-nowrap transition-all"
-          >
-            <Zap className="w-4 h-4" />
-            Apply Query
-          </button>
-        </div>
+        ) : aggregatedBaseline.length === 0 ? (
+          <div className="p-5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 text-center">
+            No actionable financial rules (penalties, discounts, SLA deductions) exist in this contract.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* List of Unique Actionable Terms with Aggregated Financial Results */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {aggregatedBaseline.map((item) => {
+                const isDiscount = item.section5Category === 'Discount';
+                const displayedResult = isDiscount
+                  ? Math.abs(item.originalResult)
+                  : item.originalResult;
 
-        {nlParseNotice && (
-          <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-indigo-600 shrink-0" />
-            <span>{nlParseNotice}</span>
+                return (
+                  <div
+                    key={item.key}
+                    className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-700">
+                        {item.parameterLabel}:
+                      </span>
+                      <span className="font-bold font-mono text-slate-900 text-sm">
+                        {item.originalParameterValue} {item.unit}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs pt-2.5 border-t border-slate-200/70">
+                      <span className="font-semibold text-slate-700">
+                        {item.section1Label}:
+                      </span>
+                      <span className="font-bold font-mono text-indigo-950 text-sm">
+                        {formatINR(displayedResult)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Base Contract Value / Invoice Amount (Each shown strictly once) */}
+            {uniqueBaseParams.map((param) => {
+              const currentVal = originalVars[param.variable_name] ?? param.default_value;
+              return (
+                <div
+                  key={param.variable_name}
+                  className="flex items-center justify-between p-3.5 rounded-xl bg-slate-100/70 border border-slate-200 text-xs"
+                >
+                  <span className="font-semibold text-slate-700">
+                    Current {param.label}:
+                  </span>
+                  <span className="font-mono font-bold text-slate-900 text-sm">
+                    {formatINR(currentVal)}
+                  </span>
+                </div>
+              );
+            })}
+
+            {/* Total Original Contract Impact Summary */}
+            {baselineComparison && (
+              <div className="flex items-center justify-between p-4 rounded-xl bg-indigo-50/70 border border-indigo-100 text-xs">
+                <span className="font-bold text-indigo-950 uppercase tracking-wide">
+                  Original Contract Total Result:
+                </span>
+                <span className="font-mono font-extrabold text-indigo-950 text-base">
+                  {formatINR(baselineComparison.original_total_impact)}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Simulator Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left Column: Baseline Variables & Scenario Builder */}
-        <div className="space-y-6">
-          {/* Baseline Variable Inputs (Filtered by contract rules) */}
-          <div className="glass-panel p-6 rounded-2xl border border-indigo-200/80 space-y-5 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center justify-between">
-              <span>1. Baseline Operational Inputs</span>
-              <span className="text-[10px] text-indigo-600 font-mono font-bold">Contract Parameters</span>
-            </h3>
+      {/* ============================================================ */}
+      {/* SECTION 2: WHAT-IF SIMULATION (EDITABLE WHAT-IF PARAMETERS)   */}
+      {/* ============================================================ */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-xs space-y-6">
+        <div className="border-b border-slate-100 pb-4">
+          <h2 className="text-base font-extrabold text-slate-900 uppercase tracking-wider">
+            2. What-If Simulation
+          </h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Modify unique parameters below to simulate hypothetical scenarios and view comparative impact.
+          </p>
+        </div>
 
-            <div className="space-y-4 text-xs">
-              {activeVariableKeys.includes('contract_value') && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-700 font-semibold">Contract / Order Value ($)</span>
-                    <span className="font-mono text-slate-900 font-bold">${(baselineVars.contract_value || 0).toLocaleString()}</span>
-                  </div>
-                  <input
-                    type="number"
-                    value={baselineVars.contract_value || ''}
-                    onChange={(e) => setBaselineVars({ ...baselineVars, contract_value: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-mono focus:bg-white focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {activeVariableKeys.includes('invoice_amount') && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-700 font-semibold">Invoice Amount ($)</span>
-                    <span className="font-mono text-slate-900 font-bold">${(baselineVars.invoice_amount || 0).toLocaleString()}</span>
-                  </div>
-                  <input
-                    type="number"
-                    value={baselineVars.invoice_amount || ''}
-                    onChange={(e) => setBaselineVars({ ...baselineVars, invoice_amount: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-mono focus:bg-white focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {activeVariableKeys.includes('delivery_delay_days') && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-700 font-semibold">Delivery Delay (Days)</span>
-                    <span className="font-mono text-rose-600 font-bold">{baselineVars.delivery_delay_days || 0} Days</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={60}
-                    value={baselineVars.delivery_delay_days || 0}
-                    onChange={(e) => setBaselineVars({ ...baselineVars, delivery_delay_days: parseInt(e.target.value) || 0 })}
-                    className="w-full accent-indigo-600"
-                  />
-                </div>
-              )}
-
-              {activeVariableKeys.includes('payment_delay_days') && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-700 font-semibold">Payment Delay (Days)</span>
-                    <span className="font-mono text-amber-600 font-bold">{baselineVars.payment_delay_days || 0} Days</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={60}
-                    value={baselineVars.payment_delay_days || 0}
-                    onChange={(e) => setBaselineVars({ ...baselineVars, payment_delay_days: parseInt(e.target.value) || 0 })}
-                    className="w-full accent-indigo-600"
-                  />
-                </div>
-              )}
-
-              {activeVariableKeys.includes('order_quantity') && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-700 font-semibold">Order Quantity (Units)</span>
-                    <span className="font-mono text-cyan-700 font-bold">{(baselineVars.order_quantity || 0).toLocaleString()} Units</span>
-                  </div>
-                  <input
-                    type="number"
-                    value={baselineVars.order_quantity || ''}
-                    onChange={(e) => setBaselineVars({ ...baselineVars, order_quantity: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-mono focus:bg-white focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {activeVariableKeys.includes('sla_uptime_percent') && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-700 font-semibold">Achieved SLA Uptime (%)</span>
-                    <span className="font-mono text-emerald-600 font-bold">{baselineVars.sla_uptime_percent || 100}%</span>
-                  </div>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={baselineVars.sla_uptime_percent || ''}
-                    onChange={(e) => setBaselineVars({ ...baselineVars, sla_uptime_percent: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-mono focus:bg-white focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {activeVariableKeys.includes('inflation_rate_percent') && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-700 font-semibold">CPI Inflation Rate (%)</span>
-                    <span className="font-mono text-indigo-600 font-bold">{baselineVars.inflation_rate_percent || 0}%</span>
-                  </div>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={baselineVars.inflation_rate_percent || ''}
-                    onChange={(e) => setBaselineVars({ ...baselineVars, inflation_rate_percent: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-mono focus:bg-white focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-              )}
-            </div>
+        {loading ? (
+          <div className="py-6 text-center text-xs text-slate-400">Loading parameters...</div>
+        ) : uniqueParams.length === 0 ? (
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500 text-center">
+            No adjustable parameters available for this contract.
           </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Editable Input Parameters (Each shown strictly once with Original value clearly visible) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* Unique Operational parameters (Delivery Delay, Payment Delay, Order Quantity, SLA Uptime, etc.) */}
+              {uniqueOperationalParams.map((param) => {
+                const origVal = originalVars[param.variable_name] !== undefined
+                  ? originalVars[param.variable_name]
+                  : param.default_value;
+                const currentWhatIfVal = whatIfVars[param.variable_name] !== undefined
+                  ? whatIfVars[param.variable_name]
+                  : origVal;
 
-          {/* Interactive Scenario Builder */}
-          <div className="glass-panel p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">2. What-If Scenarios ({scenariosInput.length})</h3>
+                return (
+                  <div
+                    key={param.variable_name}
+                    className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800">
+                        {param.label}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        Original: <strong className="text-slate-800">{origVal} {param.unit}</strong>
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-indigo-700 shrink-0">
+                        What-If:
+                      </span>
+                      <input
+                        type="number"
+                        value={currentWhatIfVal}
+                        step={param.step ?? (param.variable_name.includes('percent') ? 0.1 : 1)}
+                        onChange={(e) => setWhatIfVars({
+                          ...whatIfVars,
+                          [param.variable_name]: parseFloat(e.target.value) || 0
+                        })}
+                        className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                      />
+                      {param.unit && (
+                        <span className="text-xs font-semibold text-slate-500 shrink-0 min-w-[2.5rem]">
+                          {param.unit}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Unique Base monetary parameters (Contract Value / Invoice Amount) */}
+              {uniqueBaseParams.map((param) => {
+                const origVal = originalVars[param.variable_name] !== undefined
+                  ? originalVars[param.variable_name]
+                  : param.default_value;
+                const currentWhatIfVal = whatIfVars[param.variable_name] !== undefined
+                  ? whatIfVars[param.variable_name]
+                  : origVal;
+
+                return (
+                  <div
+                    key={param.variable_name}
+                    className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800">
+                        {param.label}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        Original: <strong className="text-slate-800">{formatINR(origVal)}</strong>
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-indigo-700 shrink-0">
+                        What-If:
+                      </span>
+                      <div className="relative w-full">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">
+                          ₹
+                        </span>
+                        <input
+                          type="number"
+                          value={currentWhatIfVal}
+                          step={10000}
+                          onChange={(e) => setWhatIfVars({
+                            ...whatIfVars,
+                            [param.variable_name]: parseFloat(e.target.value) || 0
+                          })}
+                          className="w-full bg-white border border-slate-300 rounded-lg pl-7 pr-3 py-1.5 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Simulate Action Buttons */}
+            <div className="flex flex-wrap items-center gap-3 pt-2">
               <button
-                onClick={addScenario}
-                className="flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-lg transition-colors"
+                onClick={handleSimulate}
+                disabled={simulating || loading}
+                className="px-8 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 transition-all cursor-pointer disabled:opacity-50"
               >
-                <Plus className="w-3.5 h-3.5" />
-                Add Scenario
+                {simulating ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Simulating...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Simulate</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={handleReset}
+                disabled={simulating || loading}
+                className="px-4 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset</span>
               </button>
             </div>
 
-            <div className="space-y-3">
-              {scenariosInput.map((sc, idx) => (
-                <div key={idx} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
-                  <div className="flex items-center justify-between gap-2">
-                    <input
-                      type="text"
-                      value={sc.scenario_name}
-                      onChange={e => updateScenarioName(idx, e.target.value)}
-                      className="font-bold text-slate-900 bg-white border border-slate-200 rounded-lg px-2 py-1 flex-1 text-xs focus:outline-none focus:border-indigo-400"
-                    />
+            {/* ============================================================ */}
+            {/* SIMULATION RESULT DISPLAY (AGGREGATED BY CATEGORY)           */}
+            {/* ============================================================ */}
+            {whatIfComparison && (
+              <div className="mt-8 pt-6 border-t border-slate-200/80 space-y-6 animate-in fade-in duration-300">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-slate-900">
+                      Result:
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      Evaluated across all {whatIfComparison.rules.length} contract rule(s)
+                    </span>
+                  </div>
+
+                  {/* Export Scenario Report Dropdown */}
+                  <div className="relative">
                     <button
-                      onClick={() => removeScenario(idx)}
-                      className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                      title="Remove Scenario"
+                      type="button"
+                      onClick={() => setExportOpen(prev => !prev)}
+                      disabled={exporting}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl border border-indigo-200 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+                      title="Export What-If Scenario Comparison Report"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Download className="w-3.5 h-3.5" />
+                      <span>{exporting ? 'Exporting...' : 'Export Report'}</span>
+                      <ChevronDown className={`w-3 h-3 transition-transform ${exportOpen ? 'rotate-180' : ''}`} />
                     </button>
-                  </div>
 
-                  {/* Override controls */}
-                  <div className="grid grid-cols-2 gap-2 text-[11px]">
-                    {activeVariableKeys.includes('delivery_delay_days') && (
-                      <div>
-                        <label className="text-slate-500 block mb-0.5">Delivery Delay (Days)</label>
-                        <input
-                          type="number"
-                          value={sc.variable_overrides.delivery_delay_days ?? baselineVars.delivery_delay_days}
-                          onChange={e => updateScenarioOverride(idx, 'delivery_delay_days', parseInt(e.target.value) || 0)}
-                          className="w-full bg-white border border-slate-200 rounded px-2 py-1 font-mono focus:outline-none focus:border-indigo-400"
-                        />
-                      </div>
-                    )}
-                    {activeVariableKeys.includes('payment_delay_days') && (
-                      <div>
-                        <label className="text-slate-500 block mb-0.5">Payment Delay (Days)</label>
-                        <input
-                          type="number"
-                          value={sc.variable_overrides.payment_delay_days ?? baselineVars.payment_delay_days}
-                          onChange={e => updateScenarioOverride(idx, 'payment_delay_days', parseInt(e.target.value) || 0)}
-                          className="w-full bg-white border border-slate-200 rounded px-2 py-1 font-mono focus:outline-none focus:border-indigo-400"
-                        />
-                      </div>
-                    )}
-                    {activeVariableKeys.includes('order_quantity') && (
-                      <div>
-                        <label className="text-slate-500 block mb-0.5">Order Quantity (Units)</label>
-                        <input
-                          type="number"
-                          value={sc.variable_overrides.order_quantity ?? baselineVars.order_quantity}
-                          onChange={e => updateScenarioOverride(idx, 'order_quantity', parseInt(e.target.value) || 0)}
-                          className="w-full bg-white border border-slate-200 rounded px-2 py-1 font-mono focus:outline-none focus:border-indigo-400"
-                        />
-                      </div>
-                    )}
-                    {activeVariableKeys.includes('sla_uptime_percent') && (
-                      <div>
-                        <label className="text-slate-500 block mb-0.5">SLA Uptime (%)</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={sc.variable_overrides.sla_uptime_percent ?? baselineVars.sla_uptime_percent}
-                          onChange={e => updateScenarioOverride(idx, 'sla_uptime_percent', parseFloat(e.target.value) || 0)}
-                          className="w-full bg-white border border-slate-200 rounded px-2 py-1 font-mono focus:outline-none focus:border-indigo-400"
-                        />
+                    {exportOpen && (
+                      <div className="absolute right-0 mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                        <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          Export Formats
+                        </div>
+                        <button
+                          onClick={() => handleExport('html')}
+                          className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 flex items-center gap-2.5 transition-colors cursor-pointer"
+                        >
+                          <Printer className="w-4 h-4 text-indigo-500 shrink-0" />
+                          <div>
+                            <div className="font-semibold">Executive PDF Report</div>
+                            <div className="text-[10px] text-slate-400">Printable comparison sheet</div>
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleExport('csv')}
+                          className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 flex items-center gap-2.5 transition-colors cursor-pointer"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <div>
+                            <div className="font-semibold">CSV Spreadsheet</div>
+                            <div className="text-[10px] text-slate-400">Tabular delta analysis</div>
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleExport('json')}
+                          className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-amber-50 hover:text-amber-700 flex items-center gap-2.5 transition-colors cursor-pointer"
+                        >
+                          <FileCode className="w-4 h-4 text-amber-500 shrink-0" />
+                          <div>
+                            <div className="font-semibold">JSON Package</div>
+                            <div className="text-[10px] text-slate-400">Raw comparison schema</div>
+                          </div>
+                        </button>
                       </div>
                     )}
                   </div>
                 </div>
-              ))}
-            </div>
 
-            <button
-              onClick={handleRunSimulation}
-              disabled={running || loadingContract}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-700 to-cyan-600 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold text-xs shadow-lg shadow-indigo-600/25 transition-all disabled:opacity-50 mt-2"
-            >
-              {running ? (
-                <span>Executing Simulation Engine...</span>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>RUN WHAT-IF SIMULATION</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
+                {/* Overall Contract Total Result Tiles */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">
+                      Total Original
+                    </span>
+                    <div className="text-lg font-mono font-bold text-slate-800">
+                      {formatINR(whatIfComparison.original_total_impact)}
+                    </div>
+                  </div>
 
-        {/* Right 2 Columns: Financial Comparison Matrix & Visual Charts */}
-        <div className="lg:col-span-2 space-y-6">
-          {simulationResult ? (
-            <>
-              {/* Visual Impact Comparison Bar Chart */}
-              <div className="glass-panel p-6 rounded-2xl border border-slate-200 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                    <BarChart2 className="w-4 h-4 text-indigo-600" />
-                    Scenario Financial Impact Visual Scale
-                  </h3>
-                  <span className="text-xs text-indigo-600 font-mono font-semibold">100% Deterministic Engine</span>
+                  <div className="p-4 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-1">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700 block">
+                      Total What-If
+                    </span>
+                    <div className="text-lg font-mono font-bold text-indigo-900">
+                      {formatINR(whatIfComparison.what_if_total_impact)}
+                    </div>
+                  </div>
+
+                  <div className={`p-4 rounded-xl border space-y-1 ${
+                    whatIfComparison.net_difference > 0
+                      ? 'bg-rose-50 border-rose-200'
+                      : whatIfComparison.net_difference < 0
+                        ? 'bg-emerald-50 border-emerald-200'
+                        : 'bg-slate-50 border-slate-200'
+                  }`}>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block">
+                      Total Impact
+                    </span>
+                    <div className={`text-lg font-mono font-extrabold ${
+                      whatIfComparison.net_difference > 0
+                        ? 'text-rose-600'
+                        : whatIfComparison.net_difference < 0
+                          ? 'text-emerald-600'
+                          : 'text-slate-800'
+                    }`}>
+                      {formatImpact(whatIfComparison.net_difference)}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-4 pt-2">
-                  {(() => {
-                    const maxImpact = Math.max(...(simulationResult.visual_data?.map((v: any) => Math.abs(v.impact || 0)) || [1]), 1);
-                    return simulationResult.visual_data.map((v, i) => (
-                      <div key={i} className="space-y-1">
-                        <div className="flex items-center justify-between text-xs font-mono">
-                          <span className="font-bold text-slate-800">{v.name}</span>
-                          <span className={`font-bold ${v.impact > 0 ? 'text-rose-600' : v.impact < 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
-                            ${v.impact.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                {/* Aggregated Result Cards Per Parameter / Category */}
+                <div className="space-y-3 pt-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block">
+                    Category Breakdown:
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    {aggregatedWhatIf.map((item) => {
+                      const isDiscount = item.section5Category === 'Discount';
+                      const origVal = isDiscount ? Math.abs(item.originalResult) : item.originalResult;
+                      const whatIfVal = isDiscount ? Math.abs(item.whatIfResult) : item.whatIfResult;
+
+                      return (
+                        <div
+                          key={item.key}
+                          className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5"
+                        >
+                          <span className="text-xs font-bold text-slate-900 block">
+                            {item.section5Category}
                           </span>
+
+                          <div className="space-y-1.5 text-xs font-mono">
+                            <div className="flex justify-between text-slate-600">
+                              <span>Original:</span>
+                              <span className="font-semibold text-slate-800">{formatINR(origVal)}</span>
+                            </div>
+                            <div className="flex justify-between text-indigo-900">
+                              <span>What-If:</span>
+                              <span className="font-bold text-indigo-900">{formatINR(whatIfVal)}</span>
+                            </div>
+                            <div className="flex justify-between pt-1.5 border-t border-slate-200 font-bold">
+                              <span className="text-slate-600">Impact:</span>
+                              <span className={
+                                item.difference > 0
+                                  ? 'text-rose-600'
+                                  : item.difference < 0
+                                    ? 'text-emerald-600'
+                                    : 'text-slate-600'
+                              }>
+                                {formatImpact(item.difference)}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="w-full bg-slate-100 h-3.5 rounded-full overflow-hidden border border-slate-200 p-0.5">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              v.impact > 0 ? 'bg-rose-500' : v.impact < 0 ? 'bg-emerald-500' : 'bg-indigo-600'
-                            }`}
-                            style={{ width: `${Math.min(100, Math.max(8, (Math.abs(v.impact) / maxImpact) * 100))}%` }}
-                          />
-                        </div>
-                      </div>
-                    ));
-                  })()}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
-
-              {/* Matrix Table */}
-              <ScenarioComparisonTable data={simulationResult} />
-            </>
-          ) : (
-            <div className="glass-panel p-12 rounded-2xl border border-slate-200 text-center space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center mx-auto text-indigo-600">
-                <Sparkles className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-slate-900">Ready to Run What-If Simulations</h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                Select your contract on the left. Type natural language queries or adjust numeric overrides, then click <strong>RUN WHAT-IF SIMULATION</strong> to generate an auditable financial impact comparison matrix.
-              </p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 };
+
+export default SimulatorPage;

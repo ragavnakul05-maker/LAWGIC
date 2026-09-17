@@ -1,6 +1,7 @@
 import React from 'react';
 import { Clause } from '../types';
 import { FileText, ShieldCheck, AlertTriangle, Play, Eye, Sliders } from 'lucide-react';
+import { formatINR } from '../utils/currency';
 
 interface ClauseCardProps {
   clause: Clause;
@@ -78,7 +79,7 @@ export const ClauseCard: React.FC<ClauseCardProps> = ({
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">Action & Cap</span>
               <span className="font-mono text-emerald-400 text-[11px]">
                 {rule.ir_json.actions?.[0]
-                  ? `${rule.ir_json.actions[0].type} ${rule.ir_json.actions[0].rate ? (rule.ir_json.actions[0].rate * 100) + '%' : '$' + rule.ir_json.actions[0].amount}`
+                  ? `${rule.ir_json.actions[0].type} ${rule.ir_json.actions[0].rate ? (rule.ir_json.actions[0].rate * 100) + '%' : formatINR(rule.ir_json.actions[0].amount)}`
                   : 'Execute Rule'}
               </span>
             </div>

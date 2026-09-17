@@ -3,6 +3,7 @@ import { Cpu, ShieldCheck, AlertTriangle, Filter, Search, Code2 } from 'lucide-r
 import { fetchRules, validateRule } from '../services/api';
 import { RuleSummary } from '../types';
 import { RuleEditorModal } from '../components/RuleEditorModal';
+import { formatINR } from '../utils/currency';
 
 export const RulesPage: React.FC = () => {
   const [rules, setRules] = useState<RuleSummary[]>([]);
@@ -108,7 +109,7 @@ export const RulesPage: React.FC = () => {
                       {cond ? `${cond.variable} ${cond.operator} ${cond.value}` : 'Active'}
                     </td>
                     <td className="p-4 font-mono text-[11px] text-emerald-600 font-bold">
-                      {act ? `${act.type} ${act.rate ? (act.rate * 100) + '%' : '$' + (act.amount || 0)}` : 'Execute'}
+                      {act ? `${act.type} ${act.rate ? (act.rate * 100) + '%' : formatINR(act.amount || 0)}` : 'Execute'}
                     </td>
                     <td className="p-4">
                       <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-mono text-[10px] font-bold ${

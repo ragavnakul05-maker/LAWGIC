@@ -157,3 +157,94 @@ def test_demo_users_endpoint():
     emails = [d["email"] for d in demos]
     assert "admin@lawgic.ai" in emails
     assert "counsel@lawgic.ai" in emails
+
+
+# --- Change Password Endpoint Tests ---
+
+def test_change_password_success():
+    # 1. Login to get token
+    login_res = client.post("/api/auth/login", json={
+        "email": "testuser@lawgic.ai",
+        "password": "correctpassword",
+    })
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. Change password
+    res = client.post("/api/auth/change-password", json={
+        "current_password": "correctpassword",
+        "new_password": "NewSecretPassword2026!",
+    }, headers=headers)
+    assert res.status_code == 200
+    assert "successfully updated" in res.json()["message"]
+
+    # 3. Verify old password no longer works
+    old_login = client.post("/api/auth/login", json={
+        "email": "testuser@lawgic.ai",
+        "password": "correctpassword",
+    })
+    assert old_login.status_code == 401
+
+    # 4. Verify new password succeeds
+    new_login = client.post("/api/auth/login", json={
+        "email": "testuser@lawgic.ai",
+        "password": "NewSecretPassword2026!",
+    })
+    assert new_login.status_code == 200
+
+
+def test_change_password_wrong_current():
+    login_res = client.post("/api/auth/login", json={
+        "email": "testuser@lawgic.ai",
+        "password": "correctpassword",
+    })
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = client.post("/api/auth/change-password", json={
+        "current_password": "WrongCurrentPassword",
+        "new_password": "NewSecretPassword2026!",
+    }, headers=headers)
+    assert res.status_code == 400
+    assert "incorrect" in res.json()["detail"].lower()
+
+
+def test_change_password_too_short():
+    login_res = client.post("/api/auth/login", json={
+        "email": "testuser@lawgic.ai",
+        "password": "correctpassword",
+    })
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = client.post("/api/auth/change-password", json={
+        "current_password": "correctpassword",
+        "new_password": "123",
+    }, headers=headers)
+    assert res.status_code == 400
+    assert "at least 6 characters" in res.json()["detail"].lower()
+
+
+def test_change_password_same_password_rejected():
+    login_res = client.post("/api/auth/login", json={
+        "email": "testuser@lawgic.ai",
+        "password": "correctpassword",
+    })
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = client.post("/api/auth/change-password", json={
+        "current_password": "correctpassword",
+        "new_password": "correctpassword",
+    }, headers=headers)
+    assert res.status_code == 400
+    assert "different" in res.json()["detail"].lower()
+
+
+def test_change_password_unauthenticated_blocked():
+    res = client.post("/api/auth/change-password", json={
+        "current_password": "correctpassword",
+        "new_password": "NewSecretPassword2026!",
+    })
+    assert res.status_code == 401
+

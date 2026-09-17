@@ -138,6 +138,118 @@ export interface SimulationResponse {
   visual_data: Record<string, any>[];
 }
 
+export interface ScenarioInput {
+  name: string;
+  variable_overrides: Record<string, any>;
+}
+
+export interface ContractParameterItem {
+  variable_name: string;
+  label: string;
+  unit?: string;
+  default_value: number;
+  description: string;
+  rule_code: string;
+  rule_title: string;
+  rule_type: string;
+  threshold?: number;
+  rate_or_amount?: string;
+  cap?: string;
+  source_clause: RuleSourceInfo;
+  clause_id?: string;
+  input_type?: string;
+  min_value?: number;
+  max_value?: number;
+  step?: number;
+}
+
+export interface ContractSimulatorSchemaResponse {
+  contract_id: string;
+  contract_title: string;
+  parameters: ContractParameterItem[];
+  baseline_variables: Record<string, any>;
+  suggested_presets: ScenarioInput[];
+  rules_count: number;
+}
+
+export interface ContractRuleComparisonResult {
+  rule_code: string;
+  rule_title: string;
+  rule_type: string;
+  clause_id?: string;
+  source_clause?: RuleSourceInfo;
+  parameter_name: string;
+  parameter_label: string;
+  unit: string;
+  original_parameter_value: any;
+  what_if_parameter_value: any;
+  original_result: number;
+  what_if_result: number;
+  difference: number;
+  formula: string;
+  calculation_breakdown: string;
+  reason: string;
+  cap_applied: boolean;
+  cap_detail: string;
+  decompiled_explanation: string;
+  applied_conditions: string[];
+}
+
+export interface ContractSimulationCompareRequest {
+  contract_id: string;
+  original_variables?: Record<string, any>;
+  what_if_variables: Record<string, any>;
+}
+
+export interface ContractSimulationComparisonResponse {
+  contract_id: string;
+  contract_title: string;
+  original_total_impact: number;
+  what_if_total_impact: number;
+  net_difference: number;
+  rules_evaluated_count: number;
+  rules_triggered_count: number;
+  rules: ContractRuleComparisonResult[];
+  overall_human_explanation: string;
+  audit_trace_id: string;
+  user_id?: string;
+  user_name?: string;
+  executed_at: string;
+}
+
+export interface MatchedRuleInfo {
+  rule_code: string;
+  title: string;
+  rule_type: string;
+  source: RuleSourceInfo;
+  description?: string;
+}
+
+export interface QuestionParseResponse {
+  contract_id: string;
+  question: string;
+  status: 'READY' | 'NEEDS_CONFIRMATION';
+  matched_rule: MatchedRuleInfo;
+  extracted_parameters: Record<string, any>;
+  missing_parameters: string[];
+  suggested_values: Record<string, any>;
+  assumptions: string[];
+  confirmation_prompt: string;
+}
+
+export interface QuestionCalculateResponse {
+  contract_id: string;
+  rule_code: string;
+  total_financial_impact: number;
+  formula?: string;
+  calculation_steps: ExecutionStepResult[];
+  applied_rules: string[];
+  human_explanation: string;
+  source_clause?: RuleSourceInfo;
+  assumptions: string[];
+  audit_trace_id: string;
+}
+
 export interface DashboardMetrics {
   total_contracts: number;
   clauses_extracted: number;

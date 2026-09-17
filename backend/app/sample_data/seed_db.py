@@ -49,8 +49,12 @@ def seed_database():
         db.commit()
 
         # Check if already seeded
+        demo_owner_id = demo_users[0]["id"]
         existing = db.query(ContractModel).filter(ContractModel.id == "DEMO-CONTRACT-001").first()
         if existing:
+            if not existing.user_id:
+                existing.user_id = demo_owner_id
+                db.commit()
             print("[Seed] Database already seeded with DEMO-CONTRACT-001.")
             return
 
@@ -59,6 +63,7 @@ def seed_database():
         # 1. Save Contract Record
         contract = ContractModel(
             id="DEMO-CONTRACT-001",
+            user_id=demo_owner_id,
             title="ABC Tech Master Supplier Agreement",
             filename="ABC_Tech_Supplier_Agreement.pdf",
             file_type="PDF",
@@ -157,6 +162,7 @@ def seed_database():
         exec_rec = ExecutionModel(
             id=exec_res.execution_id,
             contract_id=contract.id,
+            user_id=demo_owner_id,
             scenario_name="Baseline Production Run",
             input_variables=sample_input,
             financial_impact=exec_res.total_financial_impact,
@@ -183,6 +189,7 @@ def seed_database():
         audit = AuditLogModel(
             id=f"AUDIT-SEED-001",
             contract_id=contract.id,
+            user_id=demo_owner_id,
             action="INITIAL_SEED",
             details={
                 "message": "Sample contract, Legal IR rules, and initial execution successfully seeded.",

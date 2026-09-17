@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  LayoutDashboard, FileText, Cpu, Sliders, ShieldCheck, FileCheck2, Settings, Zap, LogOut
+  LayoutDashboard, FileText, Cpu, Sliders, ShieldCheck, Settings, Zap, LogOut
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -18,7 +18,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
     { id: 'rules', label: 'Legal Rules (IR)', icon: Cpu },
     { id: 'simulator', label: 'What-If Simulator', icon: Sliders },
     { id: 'audit', label: 'Audit & Trace', icon: ShieldCheck },
-    { id: 'rag', label: 'Statutory RAG', icon: FileCheck2 },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 

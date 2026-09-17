@@ -6,10 +6,11 @@ from app.models.schemas import AuditLogModel
 
 class AuditService:
     @staticmethod
-    def log_event(db: Session, contract_id: str, action: str, details: Dict[str, Any]):
+    def log_event(db: Session, contract_id: str, action: str, details: Dict[str, Any], user_id: Optional[str] = None):
         log_entry = AuditLogModel(
             id=f"AUDIT-{uuid.uuid4().hex[:8].upper()}",
             contract_id=contract_id,
+            user_id=user_id,
             action=action,
             details=details,
             created_at=datetime.utcnow()

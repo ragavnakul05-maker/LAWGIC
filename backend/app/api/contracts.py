@@ -1,12 +1,21 @@
 import os
+import tempfile
 import uuid
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.config import settings
+from app.config import MAX_UPLOAD_SIZE_MB
 from app.core.security import get_current_user
+from app.core.encryption import (
+    encrypt_bytes,
+    decrypt_bytes,
+    secure_filename,
+    validate_file_content,
+    get_user_storage_path,
+)
 from app.models.schemas import ContractModel, ContractPageModel, ClauseModel, RuleModel, UserModel
 from app.services.document_parser import DocumentService
 from app.services.llm_service import LLMService
@@ -17,30 +26,71 @@ from app.services.audit_service import AuditService
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
 
 @router.post("/upload")
-async def upload_contract(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
+async def upload_contract(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
     """
-    Uploads contract document (PDF, DOCX, TXT), parses text, segments clauses, and extracts Legal IR.
+    Uploads contract document with enterprise security:
+      - Enforces MAX_UPLOAD_SIZE_MB
+      - Sanitizes filename to prevent directory traversal
+      - Validates magic bytes / content signature against claimed extension
+      - Encrypts file at rest with Fernet in user's private folder
+      - Guarantees immediate cleanup of temporary parsing files
     """
-    file_ext = os.path.splitext(file.filename)[1].lower()
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided.")
+
+    safe_filename = secure_filename(file.filename)
+    file_ext = os.path.splitext(safe_filename)[1].lower()
     if file_ext not in [".pdf", ".docx", ".doc", ".txt"]:
-        raise HTTPException(status_code=400, detail="Unsupported file format. Please upload PDF, DOCX, or TXT.")
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Please upload PDF, DOCX, or TXT."
+        )
 
+    # 1. Read and validate file size
+    content = await file.read()
+    size_mb = len(content) / (1024 * 1024)
+    if size_mb > MAX_UPLOAD_SIZE_MB:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({size_mb:.1f} MB). Maximum allowed: {MAX_UPLOAD_SIZE_MB} MB"
+        )
+
+    # 2. Validate magic bytes signature against disguised executables / corrupt data
+    validate_file_content(content, safe_filename)
+
+    # 3. Store encrypted ciphertext in user's isolated private folder
     contract_id = f"CONTRACT-{uuid.uuid4().hex[:8].upper()}"
-    save_path = os.path.join(settings.UPLOAD_DIR, f"{contract_id}_{file.filename}")
+    user_storage_dir = get_user_storage_path(current_user.id, settings.UPLOAD_DIR)
+    save_path = os.path.join(user_storage_dir, f"{contract_id}_{safe_filename}.enc")
 
+    encrypted_bytes = encrypt_bytes(content)
     with open(save_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+        f.write(encrypted_bytes)
 
-    # 1. Parse Document
-    parsed = DocumentService.parse_document(save_path)
+    # 4. Parse Document securely using temporary plaintext file with guaranteed cleanup
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
+    try:
+        temp_file.write(content)
+        temp_file.flush()
+        temp_file.close()
+        parsed = DocumentService.parse_document(temp_file.name)
+    finally:
+        try:
+            os.unlink(temp_file.name)
+        except Exception:
+            pass
 
-    # 2. Save Contract Record
-    title_clean = os.path.splitext(file.filename)[0].replace("_", " ").title()
+    # 5. Save Contract Record
+    title_clean = os.path.splitext(safe_filename)[0].replace("_", " ").title()
     contract_rec = ContractModel(
         id=contract_id,
+        user_id=current_user.id,
         title=title_clean,
-        filename=file.filename,
+        filename=safe_filename,
         file_type=file_ext.replace(".", "").upper(),
         file_path=save_path,
         page_count=parsed["page_count"],
@@ -48,6 +98,7 @@ async def upload_contract(file: UploadFile = File(...), db: Session = Depends(ge
         created_at=datetime.utcnow()
     )
     db.add(contract_rec)
+
 
     # 3. Save Pages
     for p in parsed["pages"]:
@@ -122,7 +173,8 @@ async def upload_contract(file: UploadFile = File(...), db: Session = Depends(ge
             "pages": parsed["page_count"],
             "clauses_extracted": len(parsed["clauses"]),
             "rules_generated": extracted_rules_count
-        }
+        },
+        user_id=current_user.id
     )
 
     return {
@@ -136,7 +188,7 @@ async def upload_contract(file: UploadFile = File(...), db: Session = Depends(ge
 
 @router.get("")
 def list_contracts(db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
-    contracts = db.query(ContractModel).order_by(ContractModel.created_at.desc()).all()
+    contracts = db.query(ContractModel).filter(ContractModel.user_id == current_user.id).order_by(ContractModel.created_at.desc()).all()
     res = []
     for c in contracts:
         rules_count = db.query(RuleModel).filter(RuleModel.contract_id == c.id).count()
@@ -156,7 +208,7 @@ def list_contracts(db: Session = Depends(get_db), current_user: UserModel = Depe
 
 @router.get("/{contract_id}")
 def get_contract_detail(contract_id: str, db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
-    c = db.query(ContractModel).filter(ContractModel.id == contract_id).first()
+    c = db.query(ContractModel).filter(ContractModel.id == contract_id, ContractModel.user_id == current_user.id).first()
     if not c:
         raise HTTPException(status_code=404, detail="Contract not found")
 
@@ -198,3 +250,53 @@ def get_contract_detail(contract_id: str, db: Session = Depends(get_db), current
         "pages": [{"page_number": p.page_number, "text_content": p.text_content} for p in pages],
         "clauses": clause_payloads
     }
+
+@router.get("/{contract_id}/download")
+def download_contract_document(
+    contract_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Secure document download endpoint:
+      - Enforces strict user ownership (404/403)
+      - Decrypts on-disk Fernet ciphertext in memory
+      - Streams original file back to the authorized user
+    """
+    c = db.query(ContractModel).filter(
+        ContractModel.id == contract_id,
+        ContractModel.user_id == current_user.id
+    ).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    if not os.path.exists(c.file_path):
+        raise HTTPException(status_code=404, detail="Stored document file not found on server")
+
+    with open(c.file_path, "rb") as f:
+        encrypted_data = f.read()
+
+    try:
+        decrypted_data = decrypt_bytes(encrypted_data)
+    except Exception:
+        # Fallback in case a pre-existing legacy unencrypted file is being accessed
+        decrypted_data = encrypted_data
+
+    ext = os.path.splitext(c.filename)[1].lower()
+    media_types = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".doc": "application/msword",
+        ".txt": "text/plain",
+    }
+    media_type = media_types.get(ext, "application/octet-stream")
+
+    return Response(
+        content=decrypted_data,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{c.filename}"',
+            "X-Content-Type-Options": "nosniff",
+        }
+    )
+

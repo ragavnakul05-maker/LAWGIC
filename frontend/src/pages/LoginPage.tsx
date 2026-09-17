@@ -1,21 +1,26 @@
 import React, { useState } from 'react';
 import {
   Zap, Lock, Mail, User as UserIcon, ArrowRight,
-  Eye, EyeOff, AlertCircle, Building2
+  Eye, EyeOff, AlertCircle, CheckCircle2, ArrowLeft
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { requestPasswordReset } from '../services/api';
 
 export const LoginPage: React.FC = () => {
   const { login, register } = useAuth();
 
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState('Senior Commercial Legal Counsel');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Forgot Password state
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotMessage, setForgotMessage] = useState<string | null>(null);
+  const [isForgotSubmitting, setIsForgotSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,12 +31,28 @@ export const LoginPage: React.FC = () => {
       if (mode === 'signin') {
         await login({ email, password });
       } else {
-        await register({ email, password, full_name: fullName, role });
+        await register({ email, password, full_name: fullName });
       }
     } catch (err: any) {
       setError(err.message || 'Authentication failed. Please check your credentials.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setForgotMessage(null);
+    setIsForgotSubmitting(true);
+
+    try {
+      const res = await requestPasswordReset(forgotEmail);
+      setForgotMessage(res.message);
+    } catch (err: any) {
+      setError(err.message || 'Failed to submit password reset request.');
+    } finally {
+      setIsForgotSubmitting(false);
     }
   };
 
@@ -59,39 +80,55 @@ export const LoginPage: React.FC = () => {
                 LAWGIC
               </h1>
               <p className="text-[11px] font-bold text-indigo-600 tracking-wider uppercase">
-                Executable Rule Engine
+                {mode === 'forgot' ? 'Account Recovery' : 'Executable Rule Engine'}
               </p>
             </div>
             <p className="text-xs text-slate-500">
-              Contract intelligence powered by deterministic execution
+              {mode === 'forgot'
+                ? 'Enter your email to receive secure reset instructions'
+                : 'Contract intelligence powered by deterministic execution'}
             </p>
           </div>
 
-          {/* Mode Switcher Tabs */}
-          <div className="flex p-1 rounded-xl bg-slate-100/90 border border-slate-200/80">
-            <button
-              type="button"
-              onClick={() => { setMode('signin'); setError(null); }}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                mode === 'signin'
-                  ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/60'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('signup'); setError(null); }}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                mode === 'signup'
-                  ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/60'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Create Account
-            </button>
-          </div>
+          {/* Mode Switcher Tabs (Only shown on signin/signup) */}
+          {mode !== 'forgot' ? (
+            <div className="flex p-1 rounded-xl bg-slate-100/90 border border-slate-200/80">
+              <button
+                type="button"
+                onClick={() => { setMode('signin'); setError(null); }}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  mode === 'signin'
+                    ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/60'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMode('signup'); setError(null); }}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  mode === 'signup'
+                    ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/60'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Create Account
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+              <button
+                type="button"
+                onClick={() => { setMode('signin'); setError(null); setForgotMessage(null); }}
+                className="inline-flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer transition-colors"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Back to Sign In</span>
+              </button>
+              <span className="text-[11px] font-medium text-slate-400">Password Reset</span>
+            </div>
+          )}
 
           {/* Error Notification Alert */}
           {error && (
@@ -101,10 +138,71 @@ export const LoginPage: React.FC = () => {
             </div>
           )}
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'signup' && (
-              <>
+          {/* Forgot Password Success Message */}
+          {mode === 'forgot' && forgotMessage && (
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs space-y-2">
+              <div className="flex items-center gap-2 font-bold text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Reset Link Dispatched</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-emerald-700">
+                {forgotMessage}
+              </p>
+              <p className="text-[11px] text-emerald-600 pt-1">
+                Please check your email inbox and spam folder for the secure recovery link.
+              </p>
+            </div>
+          )}
+
+          {/* FORGOT PASSWORD FORM */}
+          {mode === 'forgot' ? (
+            <form onSubmit={handleForgotSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Registered Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="email"
+                    required
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    placeholder="counsel@company.com"
+                    className="w-full bg-slate-50/80 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isForgotSubmitting}
+                className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {isForgotSubmitting ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <span>Send Reset Link</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setMode('signin'); setError(null); setForgotMessage(null); }}
+                  className="text-xs text-slate-500 hover:text-slate-800 font-medium cursor-pointer transition-colors"
+                >
+                  Remember your password? <span className="text-indigo-600 font-semibold">Sign In</span>
+                </button>
+              </div>
+            </form>
+          ) : (
+            /* SIGN IN & SIGN UP FORMS */
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {mode === 'signup' && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                     Full Legal Name
@@ -121,100 +219,90 @@ export const LoginPage: React.FC = () => {
                     />
                   </div>
                 </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Enterprise Legal Role
-                  </label>
-                  <div className="relative">
-                    <Building2 className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <select
-                      value={role}
-                      onChange={(e) => setRole(e.target.value)}
-                      className="w-full bg-slate-50/80 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all appearance-none cursor-pointer"
-                    >
-                      <option value="Chief Legal Officer & General Counsel">Chief Legal Officer & General Counsel</option>
-                      <option value="Senior Commercial Legal Counsel">Senior Commercial Legal Counsel</option>
-                      <option value="Director of Procurement & Finance">Director of Procurement & Finance</option>
-                      <option value="Compliance & Regulatory Auditor">Compliance & Regulatory Auditor</option>
-                    </select>
-                  </div>
-                </div>
-              </>
-            )}
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Work Email Address
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="counsel@company.com"
-                  className="w-full bg-slate-50/80 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-slate-50/80 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            {mode === 'signin' && (
-              <div className="flex items-center justify-between text-[11px] text-slate-500">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    defaultChecked
-                    className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-0 focus:ring-offset-0"
-                  />
-                  <span>Remember this device</span>
-                </label>
-                <span className="text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer">
-                  SSO Ready
-                </span>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {isSubmitting ? (
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  <span>{mode === 'signin' ? 'Sign In to LAWGIC' : 'Create Enterprise Account'}</span>
-                  <ArrowRight className="w-4 h-4" />
-                </>
               )}
-            </button>
-          </form>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Work Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="counsel@company.com"
+                    className="w-full bg-slate-50/80 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-50/80 border border-slate-200 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {mode === 'signin' && (
+                <div className="flex items-center justify-between text-[11px] text-slate-500">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      defaultChecked
+                      className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-0 focus:ring-offset-0"
+                    />
+                    <span>Remember this device</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('forgot');
+                      setError(null);
+                      setForgotMessage(null);
+                      setForgotEmail(email);
+                    }}
+                    className="text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer transition-colors"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {isSubmitting ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <span>{mode === 'signin' ? 'Sign In to LAWGIC' : 'Create Account'}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </form>
+          )}
 
           {/* Footer Note */}
           <div className="pt-2 border-t border-slate-100 text-center">
@@ -228,3 +316,4 @@ export const LoginPage: React.FC = () => {
     </div>
   );
 };
+

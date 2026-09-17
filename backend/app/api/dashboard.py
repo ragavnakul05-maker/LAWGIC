@@ -8,18 +8,44 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 @router.get("/summary")
 def get_dashboard_summary(db: Session = Depends(get_db), current_user: UserModel = Depends(get_current_user)):
-    total_contracts = db.query(ContractModel).count()
-    clauses_extracted = db.query(ClauseModel).count()
-    active_rules = db.query(RuleModel).filter(RuleModel.validation_status == "VALID").count()
-    pending_reviews = db.query(RuleModel).filter(RuleModel.validation_status == "NEEDS_REVIEW").count()
+    user_contracts = db.query(ContractModel).filter(ContractModel.user_id == current_user.id).all()
+    user_contract_ids = [c.id for c in user_contracts]
+    total_contracts = len(user_contracts)
 
-    recent_executions = db.query(ExecutionModel).order_by(ExecutionModel.executed_at.desc()).limit(5).all()
+    if not user_contract_ids:
+        return {
+            "metrics": {
+                "total_contracts": 0,
+                "clauses_extracted": 0,
+                "active_rules": 0,
+                "pending_reviews": 0,
+                "potential_penalties": 0.0,
+                "potential_discounts": 0.0
+            },
+            "recent_contracts": [],
+            "alerts": []
+        }
+
+    clauses_extracted = db.query(ClauseModel).filter(ClauseModel.contract_id.in_(user_contract_ids)).count()
+    active_rules = db.query(RuleModel).filter(
+        RuleModel.contract_id.in_(user_contract_ids),
+        RuleModel.validation_status == "VALID"
+    ).count()
+    pending_reviews = db.query(RuleModel).filter(
+        RuleModel.contract_id.in_(user_contract_ids),
+        RuleModel.validation_status == "NEEDS_REVIEW"
+    ).count()
+
+    recent_executions = db.query(ExecutionModel).filter(
+        ExecutionModel.contract_id.in_(user_contract_ids)
+    ).order_by(ExecutionModel.executed_at.desc()).limit(5).all()
+
     potential_penalties = sum(e.financial_impact for e in recent_executions if e.financial_impact > 0)
     potential_discounts = sum(abs(e.financial_impact) for e in recent_executions if e.financial_impact < 0)
 
-    recent_contracts = db.query(ContractModel).order_by(ContractModel.created_at.desc()).limit(5).all()
+    recent_contracts_sorted = sorted(user_contracts, key=lambda c: c.created_at, reverse=True)[:5]
     contract_items = []
-    for c in recent_contracts:
+    for c in recent_contracts_sorted:
         r_count = db.query(RuleModel).filter(RuleModel.contract_id == c.id).count()
         contract_items.append({
             "id": c.id,
@@ -30,7 +56,7 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: UserModel
             "created_at": c.created_at.isoformat()
         })
 
-    alerts = [
+    all_alerts = [
         {
             "id": "ALT-001",
             "type": "WARNING",
@@ -64,6 +90,7 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: UserModel
             "rule_code": "R005"
         }
     ]
+    alerts = [a for a in all_alerts if a["contract_id"] in user_contract_ids]
 
     return {
         "metrics": {
@@ -85,7 +112,7 @@ def get_penalty_breakdown(db: Session = Depends(get_db), current_user: UserModel
     details (rule code, title, source clause section + text, individual impact).
     Used by the dashboard drill-down popup modal.
     """
-    contracts = db.query(ContractModel).order_by(ContractModel.created_at.desc()).all()
+    contracts = db.query(ContractModel).filter(ContractModel.user_id == current_user.id).order_by(ContractModel.created_at.desc()).all()
     result = []
     for c in contracts:
         executions = db.query(ExecutionModel).filter(ExecutionModel.contract_id == c.id).all()

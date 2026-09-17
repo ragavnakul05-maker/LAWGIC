@@ -10,14 +10,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 @pytest.fixture
 def client():
-    """Create a test client with mocked startup events."""
+    """Create a test client with mocked startup events and authenticated test user."""
+    from app.core.security import get_current_user
+    from app.models.schemas import UserModel
+    mock_user = UserModel(
+        id="USER-TEST-API",
+        email="test_api@lawgic.internal",
+        full_name="Test API User",
+        role="LEGAL_COUNSEL",
+        hashed_password="dummy",
+        is_active=True,
+    )
     with (
         patch("app.main.initialise_engine"),
         patch("app.main.ingest_statutes_corpus"),
     ):
         from app.main import app
+        app.dependency_overrides[get_current_user] = lambda: mock_user
         with TestClient(app) as c:
             yield c
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_health_check(client):

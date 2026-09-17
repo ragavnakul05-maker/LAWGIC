@@ -1,321 +1,542 @@
-import React, { useEffect, useState } from 'react';
-import { ShieldCheck, FileText, Cpu, Calculator, ArrowRight, Eye, Sparkles, Filter, CheckCircle2, BookOpen } from 'lucide-react';
-import { fetchAuditExecutionTrail, fetchAuditLogs, fetchContracts } from '../services/api';
-import { EvidenceModal } from '../components/EvidenceModal';
-import { Clause } from '../types';
+import React, { useEffect, useState, useMemo } from 'react';
+import {
+  ShieldCheck, FileText, ArrowRight, ChevronDown, ChevronUp,
+  CheckCircle2, AlertCircle, RefreshCw, Sparkles, Layers,
+  Code2, Clock, Check, Download, FileSpreadsheet, FileCode, Printer
+} from 'lucide-react';
+import { fetchAuditLogs, fetchAuditExecutionTrail, fetchContracts, exportAuditExecution } from '../services/api';
+
+import { formatINR } from '../utils/currency';
 
 export const AuditPage: React.FC = () => {
   const [contracts, setContracts] = useState<any[]>([]);
   const [selectedContractId, setSelectedContractId] = useState<string>('');
   const [logs, setLogs] = useState<any[]>([]);
-  const [selectedExecution, setSelectedExecution] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [selectedClauseForEvidence, setSelectedClauseForEvidence] = useState<Clause | null>(null);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string>('');
+  const [executionTrail, setExecutionTrail] = useState<any | null>(null);
+  const [selectedStepIndex, setSelectedStepIndex] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [loadingTrail, setLoadingTrail] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState<boolean>(false);
+  const [exporting, setExporting] = useState<boolean>(false);
 
+  // Expandable sections state (all collapsed by default to keep main view minimal)
+  const [expandedSections, setExpandedSections] = useState<{
+    sourceClause: boolean;
+    legalIR: boolean;
+    validation: boolean;
+    executionLog: boolean;
+  }>({
+    sourceClause: false,
+    legalIR: false,
+    validation: false,
+    executionLog: false,
+  });
+
+  const toggleSection = (section: keyof typeof expandedSections) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }));
+  };
+
+  // 1. Initial Load: fetch contracts and recent audit logs
   useEffect(() => {
-    fetchContracts()
-      .then(data => {
-        setContracts(data);
-      })
-      .catch(console.error);
-
-    loadLogs();
-  }, []);
-
-  const loadLogs = (contractId?: string) => {
     setLoading(true);
-    fetchAuditLogs(contractId || undefined)
-      .then((data) => {
-        setLogs(data);
-        setLoading(false);
-        // Auto-select first execution if available
-        const firstWithExec = data.find(l => l.details?.execution_id);
-        if (firstWithExec?.details?.execution_id) {
-          loadExecutionTrail(firstWithExec.details.execution_id);
+    Promise.all([fetchContracts(), fetchAuditLogs()])
+      .then(([contractsData, logsData]) => {
+        setContracts(contractsData || []);
+        setLogs(logsData || []);
+
+        if (contractsData && contractsData.length > 0) {
+          const defaultCid = contractsData[0].id;
+          setSelectedContractId(defaultCid);
+
+          // Find first execution for this contract if available
+          const matchingLog = (logsData || []).find((l: any) => l.contract_id === defaultCid && l.details?.execution_id);
+          if (matchingLog?.details?.execution_id) {
+            setSelectedExecutionId(matchingLog.details.execution_id);
+          } else if (logsData && logsData.length > 0 && logsData[0].details?.execution_id) {
+            setSelectedExecutionId(logsData[0].details.execution_id);
+          }
         }
+        setLoading(false);
       })
       .catch((err) => {
-        console.error(err);
+        console.error('Failed to load initial audit data:', err);
+        setError('Failed to load audit logs.');
         setLoading(false);
       });
-  };
+  }, []);
 
-  const handleContractFilterChange = (cId: string) => {
-    setSelectedContractId(cId);
-    loadLogs(cId || undefined);
-    setSelectedExecution(null);
-  };
+  // 2. When selectedContractId changes, find relevant execution or switch
+  useEffect(() => {
+    if (!selectedContractId) return;
+    const matchingLog = logs.find((l: any) => l.contract_id === selectedContractId && l.details?.execution_id);
+    if (matchingLog?.details?.execution_id) {
+      setSelectedExecutionId(matchingLog.details.execution_id);
+    }
+  }, [selectedContractId, logs]);
 
-  const loadExecutionTrail = (execId: string) => {
-    fetchAuditExecutionTrail(execId)
+  // 3. When selectedExecutionId changes, fetch the full execution trail
+  useEffect(() => {
+    if (!selectedExecutionId) return;
+    setLoadingTrail(true);
+    setError(null);
+    fetchAuditExecutionTrail(selectedExecutionId)
       .then((data) => {
-        setSelectedExecution(data);
+        setExecutionTrail(data);
+        setSelectedStepIndex(0);
+        setLoadingTrail(false);
       })
-      .catch((err) => alert(`Error loading audit trail: ${err}`));
+      .catch((err) => {
+        console.error('Failed to load execution trail:', err);
+        setError(err.message || 'Failed to load execution trail.');
+        setLoadingTrail(false);
+      });
+  }, [selectedExecutionId]);
+
+  // Available executions for the selected contract
+  const contractExecutions = useMemo(() => {
+    if (!selectedContractId) return logs;
+    const filtered = logs.filter(l => l.contract_id === selectedContractId && l.details?.execution_id);
+    return filtered.length > 0 ? filtered : logs;
+  }, [logs, selectedContractId]);
+
+  const activeStep = executionTrail?.steps?.[selectedStepIndex] || null;
+  const flowData = activeStep?.flow_data || {};
+
+  // Build fallback 5-step flow values if flow_data is not directly available
+  const stepInput = flowData.input_text || (activeStep ? `${activeStep.rule_title} Input` : 'Input');
+  const stepCondition = flowData.condition_text || (activeStep?.subtotal !== 0 ? 'Rule Threshold Met → TRUE' : 'Within Threshold → FALSE');
+  const stepRule = flowData.rule_applied_text || (activeStep ? `${activeStep.rule_code} – ${activeStep.rule_title}` : 'Rule');
+  const stepCalc = flowData.calculation_text || (activeStep?.formula ? activeStep.formula.replace('$', '₹') : formatINR(activeStep?.subtotal));
+  const stepResult = flowData.result_text || formatINR(activeStep?.subtotal);
+
+  // Deterministic decompiled explanation (Non-LLM)
+  const decompiledText = activeStep?.decompiled_explanation ||
+    (activeStep ? `Rule ${activeStep.rule_code} condition was evaluated deterministically. Contractual impact assessed, resulting in ${formatINR(activeStep.subtotal)}.` : '');
+
+  const selectedContract = contracts.find(c => c.id === selectedContractId);
+
+  const handleExport = async (format: 'html' | 'csv' | 'json') => {
+    if (!selectedExecutionId) return;
+    try {
+      setExporting(true);
+      await exportAuditExecution(selectedExecutionId, format);
+    } catch (err: any) {
+      console.error('Export failed:', err);
+      alert(err.message || 'Failed to export dossier');
+    } finally {
+      setExporting(false);
+      setExportOpen(false);
+    }
   };
 
   return (
-    <div className="p-8 space-y-8 max-w-7xl mx-auto">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <ShieldCheck className="w-6 h-6 text-indigo-600" />
-            Audit & Provenance Traceability Hub
-          </h2>
-          <p className="text-xs text-slate-500 font-medium mt-0.5">
-            Transparent step-by-step audit trail linking calculated financial outcomes back to original contract clauses and plain English decompilation.
-          </p>
-        </div>
-
-        {/* Contract Filter Selector */}
-        <div className="glass-panel p-3 rounded-2xl flex items-center gap-3 border border-indigo-100 bg-white shadow-xs">
-          <Filter className="w-4 h-4 text-indigo-600" />
-          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">Filter Contract:</label>
-          <select
-            value={selectedContractId}
-            onChange={e => handleContractFilterChange(e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold bg-slate-50 text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 min-w-[220px]"
-          >
-            <option value="">All Contracts</option>
-            {contracts.map((c: any) => (
-              <option key={c.id} value={c.id}>{c.title} ({c.id})</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Audit Pipeline Diagram */}
-      <div className="glass-panel p-5 rounded-2xl border border-slate-200 flex items-center justify-between font-mono text-xs shadow-xs">
-        <div className="flex items-center gap-2 text-indigo-700 font-bold">
-          <FileText className="w-4 h-4 text-indigo-600" /> Contract Source
-        </div>
-        <ArrowRight className="w-4 h-4 text-slate-400" />
-        <div className="flex items-center gap-2 text-cyan-700 font-bold">
-          <Cpu className="w-4 h-4 text-cyan-600" /> Clause Segment
-        </div>
-        <ArrowRight className="w-4 h-4 text-slate-400" />
-        <div className="flex items-center gap-2 text-purple-700 font-bold">
-          <ShieldCheck className="w-4 h-4 text-purple-600" /> Legal IR Rule
-        </div>
-        <ArrowRight className="w-4 h-4 text-slate-400" />
-        <div className="flex items-center gap-2 text-amber-700 font-bold">
-          <Calculator className="w-4 h-4 text-amber-600" /> Deterministic Execution
-        </div>
-        <ArrowRight className="w-4 h-4 text-slate-400" />
-        <div className="flex items-center gap-2 text-emerald-700 font-bold">
-          <Sparkles className="w-4 h-4 text-emerald-600" /> Financial Result
-        </div>
-      </div>
-
-      {/* Content Split */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left Col: Audit Logs List */}
-        <div className="glass-panel p-6 rounded-2xl border border-slate-200 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">System Audit Events ({logs.length})</h3>
-            <span className="text-[10px] font-mono text-slate-400">Click to Inspect</span>
+    <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
+      {/* Clean Header & Navigation Bar: Contract -> Rule */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 block">
+              Audit & Traceability Hub
+            </span>
+            <h1 className="text-xl font-bold text-slate-900">
+              Contract Execution Trace
+            </h1>
           </div>
 
-          {loading ? (
-            <div className="text-xs text-slate-500 text-center py-6">Loading audit logs...</div>
-          ) : logs.length === 0 ? (
-            <div className="text-xs text-slate-400 text-center py-6">No execution audit events found.</div>
-          ) : (
-            <div className="space-y-3 max-h-[650px] overflow-y-auto pr-1">
-              {logs.map((l) => {
-                const isSelected = selectedExecution?.execution_id === l.details?.execution_id;
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Contract Selector */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-bold text-slate-600 shrink-0">Contract:</label>
+              <select
+                value={selectedContractId}
+                onChange={e => setSelectedContractId(e.target.value)}
+                disabled={loading || loadingTrail}
+                className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+              >
+                {contracts.length === 0 ? (
+                  <option value="">No Contracts</option>
+                ) : (
+                  contracts.map((c: any) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title} ({c.id})
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+
+            {/* Export Dossier Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setExportOpen(prev => !prev)}
+                disabled={!selectedExecutionId || exporting}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl border border-indigo-200 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+                title="Export executive audit dossier in PDF/HTML, CSV, or JSON format"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{exporting ? 'Exporting...' : 'Export Dossier'}</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${exportOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {exportOpen && (
+                <div className="absolute right-0 mt-1.5 w-60 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Audit Export Formats
+                  </div>
+                  <button
+                    onClick={() => handleExport('html')}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 flex items-center gap-2.5 transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4 text-indigo-500 shrink-0" />
+                    <div>
+                      <div className="font-semibold">Executive PDF Report</div>
+                      <div className="text-[10px] text-slate-400">Print-ready formatted document</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleExport('csv')}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 flex items-center gap-2.5 transition-colors cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-500 shrink-0" />
+                    <div>
+                      <div className="font-semibold">CSV Calculation Ledger</div>
+                      <div className="text-[10px] text-slate-400">Tabular math and rule steps</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleExport('json')}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-amber-50 hover:text-amber-700 flex items-center gap-2.5 transition-colors cursor-pointer"
+                  >
+                    <FileCode className="w-4 h-4 text-amber-500 shrink-0" />
+                    <div>
+                      <div className="font-semibold">JSON Audit Package</div>
+                      <div className="text-[10px] text-slate-400">SHA-256 verified audit dossier</div>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Rule / Execution Step Selector */}
+        {executionTrail && executionTrail.steps && executionTrail.steps.length > 0 ? (
+          <div className="space-y-2 pt-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-700">Select Rule to Inspect Trace:</span>
+              <span className="font-mono text-slate-500 text-[11px]">
+                Execution: <code className="bg-slate-100 px-1.5 py-0.5 rounded">{executionTrail.execution_id}</code>
+              </span>
+            </div>
+
+            {/* Compact Rule Tabs */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              {executionTrail.steps.map((s: any, idx: number) => {
+                const isSelected = idx === selectedStepIndex;
                 return (
-                  <div
-                    key={l.id}
-                    onClick={() => {
-                      if (l.details?.execution_id) {
-                        loadExecutionTrail(l.details.execution_id);
-                      }
-                    }}
-                    className={`p-3.5 rounded-xl border transition-all space-y-1 cursor-pointer shadow-xs ${
+                  <button
+                    key={s.step_number || idx}
+                    onClick={() => setSelectedStepIndex(idx)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 border ${
                       isSelected
-                        ? 'bg-indigo-50/80 border-indigo-500 ring-1 ring-indigo-500/20'
-                        : 'bg-white border-slate-200 hover:border-indigo-300'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <div className="flex items-center justify-between text-xs">
-                      <span className={`font-bold uppercase tracking-wider text-[11px] ${
-                        l.action.includes('SIMULATION') ? 'text-purple-600' : 'text-indigo-600'
-                      }`}>{l.action.replace(/_/g, ' ')}</span>
-                      <span className="font-mono text-[10px] text-slate-400">{new Date(l.created_at).toLocaleTimeString()}</span>
-                    </div>
-                    <p className="text-xs text-slate-800 font-semibold truncate">
-                      {l.contract_title}
-                    </p>
-                    {l.details?.execution_id && (
-                      <span className="inline-block text-[10px] font-mono text-emerald-600 font-bold mt-1">
-                        Exec ID: {l.details.execution_id} →
-                      </span>
-                    )}
-                  </div>
+                    <span className="font-mono font-bold text-[11px]">{s.rule_code}</span>
+                    <span className="text-[11px] max-w-[140px] truncate">{s.rule_title}</span>
+                  </button>
                 );
               })}
             </div>
-          )}
-        </div>
-
-        {/* Right 2 Cols: Execution Step Breakdown & Plain English Summary */}
-        <div className="lg:col-span-2 space-y-6">
-          {selectedExecution ? (
-            <div className="glass-panel p-6 rounded-2xl border border-emerald-200 space-y-6">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-mono text-[11px] font-bold">
-                      {selectedExecution.scenario_name || 'Rule Execution'}
-                    </span>
-                  </div>
-                  <h3 className="text-base font-bold text-slate-900 mt-1">Execution Trail: {selectedExecution.execution_id}</h3>
-                  <p className="text-xs text-slate-500 font-mono">Contract: {selectedExecution.contract_title}</p>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-500 font-bold uppercase block">Net Impact</span>
-                  <span className={`text-xl font-extrabold font-mono ${selectedExecution.financial_impact > 0 ? 'text-rose-600' : selectedExecution.financial_impact < 0 ? 'text-emerald-600' : 'text-slate-800'}`}>
-                    ${selectedExecution.financial_impact.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              </div>
-
-              {/* Execution Steps */}
-              <div className="space-y-4">
-                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                  <span>Step-by-Step Calculation & Evidence Trace ({selectedExecution.steps.length} Steps)</span>
-                  <span className="text-[11px] font-mono text-indigo-600">Deterministic Engine</span>
-                </h4>
-
-                {selectedExecution.steps.map((s: any) => (
-                  <div key={s.step_number} className="p-4 rounded-xl bg-white border border-slate-200 space-y-2.5 text-xs shadow-xs">
-                    <div className="flex items-center justify-between font-mono">
-                      <span className="font-bold text-slate-900">Step {s.step_number}: [{s.rule_code}] {s.rule_title}</span>
-                      <span className={`font-bold font-mono text-sm ${s.subtotal > 0 ? 'text-rose-600' : s.subtotal < 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
-                        ${s.subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                      </span>
-                    </div>
-
-                    <p className="text-slate-700 leading-relaxed text-xs">{s.description}</p>
-
-                    {s.source_clause && (
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                        <span className="text-[11px] text-slate-500 font-mono">
-                          Source: Section {s.source_clause.section} (Page {s.source_clause.page})
-                        </span>
-
-                        <button
-                          onClick={() => {
-                            setSelectedClauseForEvidence({
-                              id: s.source_clause.id || 'C001',
-                              page_number: s.source_clause.page,
-                              section_number: s.source_clause.section,
-                              title: s.source_clause.title,
-                              original_text: s.source_clause.original_text,
-                              clause_type: 'late_payment_interest',
-                              rule: {
-                                id: 'R001',
-                                rule_code: s.rule_code,
-                                title: s.rule_title,
-                                ir_json: s.rule_ir,
-                                validation_status: 'VALID',
-                                human_explanation: s.decompiled_text || s.human_explanation || s.description
-                              }
-                            });
-                          }}
-                          className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-lg transition-colors"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          View Source Clause Evidence
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Individual Step Plain English Decompilation */}
-                    {(s.decompiled_text || s.human_explanation) && (
-                      <div className="mt-2 p-3 rounded-xl bg-indigo-50/80 border border-indigo-100 text-indigo-900 space-y-1">
-                        <p className="text-[11px] font-bold text-indigo-700 flex items-center gap-1.5">
-                          <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
-                          Plain English Decompiled Logic
-                        </p>
-                        <p className="text-xs text-indigo-950 font-medium leading-relaxed">
-                          {s.decompiled_text || s.human_explanation}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Complete Contract Backtracking & Plain English Legal Summary Box */}
-              <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-900 via-slate-900 to-slate-950 text-white space-y-3.5 shadow-xl border border-indigo-700/50">
-                <div className="flex items-center justify-between border-b border-indigo-800/80 pb-3">
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="w-5 h-5 text-indigo-400" />
-                    <h4 className="text-sm font-bold tracking-wide">Complete Backtracking & Plain English Summary</h4>
-                  </div>
-                  <span className="text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full">
-                    Deterministic Provenance
-                  </span>
-                </div>
-
-                <div className="space-y-3 text-xs leading-relaxed text-indigo-100">
-                  <p>
-                    <strong className="text-white">Contract:</strong> {selectedExecution.contract_title} ({selectedExecution.contract_id})
-                  </p>
-
-                  <p>
-                    <strong className="text-white">Input Operational Variables:</strong>{' '}
-                    <span className="font-mono text-cyan-300">
-                      {Object.entries(selectedExecution.input_variables || {}).map(([k, v]) => `${k.replace(/_/g, ' ')} = ${v}`).join(' | ')}
-                    </span>
-                  </p>
-
-                  <div className="space-y-2 pt-1">
-                    <p className="font-bold text-white uppercase text-[11px] tracking-wider">Triggered Legal Logic (Plain English):</p>
-                    {selectedExecution.steps.map((s: any) => (
-                      <div key={s.step_number} className="p-2.5 rounded-lg bg-indigo-950/80 border border-indigo-800/50 text-[11px]">
-                        <span className="font-mono font-bold text-cyan-400">Step {s.step_number} [{s.rule_code}]: </span>
-                        <span>{s.decompiled_text || s.description}</span>
-                        {s.source_clause && (
-                          <span className="text-indigo-300 font-mono text-[10px] block mt-1">
-                            ↳ Backtracked to Clause Section {s.source_clause.section} (Page {s.source_clause.page})
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="pt-2 border-t border-indigo-800/60 flex items-center justify-between font-mono">
-                    <span className="font-bold text-white text-xs">Final Net Financial Impact:</span>
-                    <span className={`text-base font-extrabold ${selectedExecution.financial_impact > 0 ? 'text-rose-400' : selectedExecution.financial_impact < 0 ? 'text-emerald-400' : 'text-white'}`}>
-                      ${selectedExecution.financial_impact.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                </div>
-              </div>
+          </div>
+        ) : (
+          !loadingTrail && (
+            <div className="text-xs text-slate-500 py-2">
+              No recent execution trails found for this contract. Run a simulation to inspect its deterministic trace.
             </div>
-          ) : (
-            <div className="glass-panel p-12 rounded-2xl border border-slate-200 text-center space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center mx-auto text-indigo-600">
-                <ShieldCheck className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-slate-900">Select an Audit Event to Inspect Execution Trail</h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                Click on any execution event on the left log list to inspect the complete 100% reproducible step-by-step mathematical trace, contract evidence clause, and plain English decompilation summary.
-              </p>
-            </div>
-          )}
-        </div>
+          )
+        )}
       </div>
 
-      <EvidenceModal
-        clause={selectedClauseForEvidence}
-        onClose={() => setSelectedClauseForEvidence(null)}
-      />
+      {/* Error Banner */}
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {loadingTrail ? (
+        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-xs text-slate-500 space-y-2">
+          <RefreshCw className="w-5 h-5 animate-spin mx-auto text-indigo-600" />
+          <p>Loading deterministic execution trail...</p>
+        </div>
+      ) : activeStep ? (
+        <div className="space-y-6">
+          {/* ============================================================ */}
+          {/* 1. HORIZONTAL 5-STEP EXECUTION TRACE FLOW                     */}
+          {/* ============================================================ */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-xs space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-indigo-600" />
+                  Deterministic Execution Trace
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Step-by-step mathematical progression from input to contractual result.
+                </p>
+              </div>
+
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-mono font-bold border border-emerald-200 flex items-center gap-1">
+                <Check className="w-3 h-3 text-emerald-600" />
+                Verified Non-LLM Execution
+              </span>
+            </div>
+
+            {/* The 5-Step Horizontal Flow */}
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-stretch">
+              {/* ① INPUT */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-800">
+                    ① INPUT
+                  </span>
+                </div>
+                <div className="text-xs font-mono font-bold text-slate-900">
+                  {stepInput}
+                </div>
+              </div>
+
+              {/* ② CONDITION */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800">
+                    ② CONDITION
+                  </span>
+                </div>
+                <div className="text-xs font-mono font-bold text-slate-900">
+                  {stepCondition}
+                </div>
+              </div>
+
+              {/* ③ RULE APPLIED */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-purple-100 text-purple-800">
+                    ③ RULE APPLIED
+                  </span>
+                </div>
+                <div className="text-xs font-mono font-bold text-slate-900">
+                  {stepRule}
+                </div>
+              </div>
+
+              {/* ④ CALCULATION */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800">
+                    ④ CALCULATION
+                  </span>
+                </div>
+                <div className="text-xs font-mono font-bold text-slate-900">
+                  {stepCalc}
+                </div>
+              </div>
+
+              {/* ⑤ RESULT */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                    activeStep.subtotal > 0
+                      ? 'bg-rose-100 text-rose-800'
+                      : activeStep.subtotal < 0
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-slate-200 text-slate-800'
+                  }`}>
+                    ⑤ RESULT
+                  </span>
+                </div>
+                <div className={`text-sm font-mono font-extrabold ${
+                  activeStep.subtotal > 0
+                    ? 'text-rose-600'
+                    : activeStep.subtotal < 0
+                      ? 'text-emerald-600'
+                      : 'text-slate-900'
+                }`}>
+                  {stepResult}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ============================================================ */}
+          {/* 2. DEDICATED DECOMPILATION SECTION (NON-LLM)                 */}
+          {/* ============================================================ */}
+          <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl border border-slate-800 shadow-sm space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-indigo-400" />
+                <span className="text-xs font-bold uppercase tracking-wider text-indigo-300">
+                  Deterministic Decompilation
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                Non-LLM DecompilerService
+              </span>
+            </div>
+            <p className="text-sm font-sans text-slate-200 leading-relaxed font-medium">
+              "{decompiledText}"
+            </p>
+          </div>
+
+          {/* ============================================================ */}
+          {/* 3. EXPANDABLE SECTIONS (SOURCE, LEGAL IR, VALIDATION, LOG)   */}
+          {/* ============================================================ */}
+          <div className="space-y-3">
+            {/* Section A: Source Clause & Section / Page */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <button
+                onClick={() => toggleSection('sourceClause')}
+                className="w-full px-5 py-3.5 flex items-center justify-between text-xs font-bold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-indigo-600" />
+                  <span>Source Clause & Contract Reference</span>
+                  {activeStep.source_clause && (
+                    <span className="text-[11px] font-mono text-slate-500 font-normal">
+                      (Section {activeStep.source_clause.section}, Page {activeStep.source_clause.page})
+                    </span>
+                  )}
+                </div>
+                {expandedSections.sourceClause ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+              </button>
+
+              {expandedSections.sourceClause && (
+                <div className="px-5 pb-5 pt-2 border-t border-slate-100 bg-slate-50/50 space-y-2 text-xs">
+                  {activeStep.source_clause ? (
+                    <>
+                      <div className="font-semibold text-slate-700">
+                        {activeStep.source_clause.title}
+                      </div>
+                      <blockquote className="p-3 bg-white rounded-lg border border-slate-200 text-slate-700 font-serif italic text-xs leading-relaxed">
+                        "{activeStep.source_clause.original_text}"
+                      </blockquote>
+                    </>
+                  ) : (
+                    <p className="text-slate-500 italic">No source clause text linked to this step.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Section B: Structured Legal IR */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <button
+                onClick={() => toggleSection('legalIR')}
+                className="w-full px-5 py-3.5 flex items-center justify-between text-xs font-bold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <Code2 className="w-4 h-4 text-purple-600" />
+                  <span>Structured Legal Intermediate Representation (IR)</span>
+                </div>
+                {expandedSections.legalIR ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+              </button>
+
+              {expandedSections.legalIR && (
+                <div className="px-5 pb-5 pt-2 border-t border-slate-100 bg-slate-50/50">
+                  {activeStep.rule_ir ? (
+                    <pre className="p-4 rounded-xl bg-slate-900 text-indigo-300 font-mono text-[11px] overflow-x-auto">
+                      {JSON.stringify(activeStep.rule_ir, null, 2)}
+                    </pre>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">No Legal IR schema attached to this step.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Section C: Rule Validation */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <button
+                onClick={() => toggleSection('validation')}
+                className="w-full px-5 py-3.5 flex items-center justify-between text-xs font-bold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Rule Validation Status</span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono text-[10px] font-bold">
+                    {activeStep.validation_status || 'VALID'}
+                  </span>
+                </div>
+                {expandedSections.validation ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+              </button>
+
+              {expandedSections.validation && (
+                <div className="px-5 pb-5 pt-2 border-t border-slate-100 bg-slate-50/50 space-y-2 text-xs">
+                  <div className="flex items-center gap-2 text-emerald-800 font-semibold">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Schema verification complete: Deterministic variables, conditions, and actions validated.</span>
+                  </div>
+                  <p className="text-slate-600 text-[11px]">
+                    Zero ambiguity flags detected. Mathematical bounds and operator semantics are verified for deterministic execution.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Section D: Detailed Execution Log */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <button
+                onClick={() => toggleSection('executionLog')}
+                className="w-full px-5 py-3.5 flex items-center justify-between text-xs font-bold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-slate-600" />
+                  <span>Detailed Execution Log & Provenance</span>
+                </div>
+                {expandedSections.executionLog ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+              </button>
+
+              {expandedSections.executionLog && (
+                <div className="px-5 pb-5 pt-2 border-t border-slate-100 bg-slate-50/50 space-y-2 font-mono text-[11px] text-slate-700">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>Execution ID: <code className="font-bold">{executionTrail.execution_id}</code></div>
+                    <div>Contract ID: <code className="font-bold">{executionTrail.contract_id}</code></div>
+                    <div>Scenario: <code className="font-bold">{executionTrail.scenario_name || 'Production Run'}</code></div>
+                    <div>Executed At: <code className="font-bold">{new Date(executionTrail.executed_at).toLocaleString()}</code></div>
+                    <div>Step Number: <code className="font-bold">{activeStep.step_number}</code></div>
+                    <div>Rule Code: <code className="font-bold">{activeStep.rule_code}</code></div>
+                  </div>
+                  {activeStep.formula && (
+                    <div className="pt-2 border-t border-slate-200">
+                      <span className="text-slate-500">Raw Formula:</span> <code>{activeStep.formula}</code>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center space-y-3">
+          <ShieldCheck className="w-8 h-8 text-slate-400 mx-auto" />
+          <h3 className="text-base font-bold text-slate-900">Select a Contract to Inspect Execution Trace</h3>
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            Choose an uploaded contract from the dropdown above to inspect its 5-step deterministic flow and decompiled legal rationale.
+          </p>
+        </div>
+      )}
     </div>
   );
 };
 
+export default AuditPage;

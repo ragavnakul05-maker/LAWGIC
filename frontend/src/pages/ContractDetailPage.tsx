@@ -7,6 +7,7 @@ import { EvidenceModal } from '../components/EvidenceModal';
 import { RuleEditorModal } from '../components/RuleEditorModal';
 import { fetchContractDetail, validateRule, executeContractRules } from '../services/api';
 import { ContractDetail, Clause, RuleExecutionOutput, RuleSummary } from '../types';
+import { formatINR } from '../utils/currency';
 
 interface ContractDetailPageProps {
   contractId: string;
@@ -211,7 +212,7 @@ export const ContractDetailPage: React.FC<ContractDetailPageProps> = ({ contract
             {/* Form Inputs Grid */}
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
-                <label className="text-[11px] font-semibold text-slate-700 block mb-1">Contract Value ($)</label>
+                <label className="text-[11px] font-semibold text-slate-700 block mb-1">Contract Value (₹)</label>
                 <input
                   type="number"
                   value={variables.contract_value}
@@ -298,7 +299,7 @@ export const ContractDetailPage: React.FC<ContractDetailPageProps> = ({ contract
                   <span className={`text-2xl font-extrabold font-mono ${
                     executionResult.total_financial_impact > 0 ? 'text-rose-600' : executionResult.total_financial_impact < 0 ? 'text-emerald-600' : 'text-slate-800'
                   }`}>
-                    ${executionResult.total_financial_impact.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {formatINR(executionResult.total_financial_impact)}
                   </span>
                 </div>
                 <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200 font-mono text-xs font-bold">
@@ -316,7 +317,7 @@ export const ContractDetailPage: React.FC<ContractDetailPageProps> = ({ contract
                         Step {step.step_number}: [{step.rule_code}] {step.title}
                       </span>
                       <span className={`font-bold ${step.subtotal > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        ${step.subtotal.toLocaleString()}
+                        {formatINR(step.subtotal)}
                       </span>
                     </div>
                     <p className="text-slate-700 leading-normal text-[11px]">{step.description}</p>

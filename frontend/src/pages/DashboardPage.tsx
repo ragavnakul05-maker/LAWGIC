@@ -5,6 +5,7 @@ import {
 import { MetricCard } from '../components/MetricCard';
 import { fetchDashboardSummary, fetchPenaltyBreakdown } from '../services/api';
 import { DashboardMetrics, ContractSummary, AlertItem } from '../types';
+import { formatINR, formatINRImpact } from '../utils/currency';
 
 interface DashboardPageProps {
   onNavigate: (tab: string, contractId?: string) => void;
@@ -99,7 +100,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
         >
           <div>
             <span className="text-xs font-semibold text-rose-600 uppercase tracking-wider block">Potential Delay Penalties</span>
-            <span className="text-2xl font-extrabold text-slate-900">${metrics?.potential_penalties.toLocaleString()}</span>
+            <span className="text-2xl font-extrabold text-slate-900">{formatINR(metrics?.potential_penalties)}</span>
             <p className="text-[11px] text-slate-500 mt-1">Calculated via Liquidated Damages & SLA Rules</p>
           </div>
           <div className="p-3 rounded-2xl bg-rose-100 text-rose-600 border border-rose-200">
@@ -113,7 +114,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
         >
           <div>
             <span className="text-xs font-semibold text-emerald-700 uppercase tracking-wider block">Potential Volume Discounts</span>
-            <span className="text-2xl font-extrabold text-slate-900">${metrics?.potential_discounts.toLocaleString()}</span>
+            <span className="text-2xl font-extrabold text-slate-900">{formatINR(metrics?.potential_discounts)}</span>
             <p className="text-[11px] text-slate-500 mt-1">Calculated via Tiered Bulk Order Quantity Triggers</p>
           </div>
           <div className="p-3 rounded-2xl bg-emerald-100 text-emerald-600 border border-emerald-200">
@@ -247,9 +248,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
                               <p className="text-xs text-slate-400 font-mono">{c.id} · {c.execution_count} execution{c.execution_count !== 1 ? 's' : ''}</p>
                             </div>
                             <div className={`text-lg font-extrabold font-mono ${showBreakdown === 'penalties' ? 'text-rose-600' : 'text-emerald-600'}`}>
-                              ${showBreakdown === 'penalties'
-                                ? c.total_penalties.toLocaleString()
-                                : c.total_discounts.toLocaleString()}
+                              {formatINR(showBreakdown === 'penalties' ? c.total_penalties : c.total_discounts)}
                             </div>
                           </div>
 
@@ -277,7 +276,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
                                     </div>
                                     {r.latest_impact !== null && (
                                       <div className={`shrink-0 font-mono font-bold text-sm ${r.latest_impact > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                        {r.latest_impact < 0 ? '-' : '+'}${Math.abs(r.latest_impact).toLocaleString()}
+                                        {formatINRImpact(r.latest_impact)}
                                       </div>
                                     )}
                                   </div>

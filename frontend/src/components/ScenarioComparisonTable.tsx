@@ -1,6 +1,7 @@
 import React from 'react';
 import { SimulationResponse } from '../types';
 import { TrendingUp, TrendingDown, Minus, CheckCircle2 } from 'lucide-react';
+import { formatINR, formatINRImpact } from '../utils/currency';
 
 interface ScenarioComparisonTableProps {
   data: SimulationResponse | null;
@@ -25,8 +26,8 @@ export const ScenarioComparisonTable: React.FC<ScenarioComparisonTableProps> = (
             <tr>
               <th className="p-3.5">Scenario</th>
               <th className="p-3.5">Key Variable Inputs</th>
-              <th className="p-3.5 text-right">Financial Impact ($)</th>
-              <th className="p-3.5 text-right">Delta ($)</th>
+              <th className="p-3.5 text-right">Financial Impact (₹)</th>
+              <th className="p-3.5 text-right">Delta (₹)</th>
               <th className="p-3.5 text-right">% Change</th>
               <th className="p-3.5">Rule Summary</th>
             </tr>
@@ -42,9 +43,9 @@ export const ScenarioComparisonTable: React.FC<ScenarioComparisonTableProps> = (
                 {Object.entries(baseline.variables).slice(0, 3).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join(', ')}
               </td>
               <td className="p-3.5 text-right font-mono font-bold text-slate-900">
-                ${baseline.financial_impact.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                {formatINR(baseline.financial_impact)}
               </td>
-              <td className="p-3.5 text-right font-mono text-slate-500">$0.00</td>
+              <td className="p-3.5 text-right font-mono text-slate-500">₹0</td>
               <td className="p-3.5 text-right font-mono text-slate-500">0.0%</td>
               <td className="p-3.5 text-[11px] text-slate-500 truncate max-w-xs">{baseline.calculation_summary}</td>
             </tr>
@@ -63,12 +64,12 @@ export const ScenarioComparisonTable: React.FC<ScenarioComparisonTableProps> = (
                   <td className={`p-3.5 text-right font-mono font-bold ${
                     isIncrease ? 'text-rose-600' : isDecrease ? 'text-emerald-600' : 'text-slate-800'
                   }`}>
-                    ${sc.financial_impact.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {formatINR(sc.financial_impact)}
                   </td>
                   <td className={`p-3.5 text-right font-mono font-semibold ${
                     isIncrease ? 'text-rose-600' : isDecrease ? 'text-emerald-600' : 'text-slate-500'
                   }`}>
-                    {isIncrease ? `+$${sc.difference_from_baseline.toLocaleString()}` : `$${sc.difference_from_baseline.toLocaleString()}`}
+                    {formatINRImpact(sc.difference_from_baseline)}
                   </td>
                   <td className="p-3.5 text-right">
                     <span className={`inline-flex items-center gap-1 font-mono font-bold text-[11px] px-2.5 py-0.5 rounded-full ${

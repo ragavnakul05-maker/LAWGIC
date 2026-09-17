@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LoginPage } from './pages/LoginPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { Navbar } from './components/Navbar';
 import { Header } from './components/Header';
 import { DashboardPage } from './pages/DashboardPage';
@@ -9,7 +10,6 @@ import { ContractDetailPage } from './pages/ContractDetailPage';
 import { RulesPage } from './pages/RulesPage';
 import { SimulatorPage } from './pages/SimulatorPage';
 import { AuditPage } from './pages/AuditPage';
-import { StatutoryRAGPage } from './pages/StatutoryRAGPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { Zap } from 'lucide-react';
 
@@ -17,6 +17,42 @@ function MainAppContent() {
   const { isAuthenticated, isLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [selectedContractId, setSelectedContractId] = useState<string>('DEMO-CONTRACT-001');
+
+  // Detect password reset token robustly from URL search query or hash
+  const [resetToken, setResetToken] = useState<string | null>(() => {
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const sToken = searchParams.get('token');
+      if (sToken) return sToken.trim().replace(/\/$/, '');
+
+      if (window.location.hash) {
+        const hash = window.location.hash;
+        const qIdx = hash.indexOf('?');
+        if (qIdx !== -1) {
+          const hashParams = new URLSearchParams(hash.substring(qIdx));
+          const hToken = hashParams.get('token');
+          if (hToken) return hToken.trim().replace(/\/$/, '');
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const handleReturnToLogin = () => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('token');
+      if (url.hash && url.hash.includes('token=')) {
+        url.hash = '';
+      }
+      window.history.replaceState({}, '', url.pathname + (url.search || '') + (url.hash || ''));
+    } catch {
+      // fallback
+    }
+    setResetToken(null);
+  };
 
   if (isLoading) {
     return (
@@ -29,6 +65,16 @@ function MainAppContent() {
           <span>Verifying LAWGIC session...</span>
         </div>
       </div>
+    );
+  }
+
+  // If a reset token is present in the URL, render ResetPasswordPage
+  if (resetToken) {
+    return (
+      <ResetPasswordPage
+        token={resetToken}
+        onNavigateToLogin={handleReturnToLogin}
+      />
     );
   }
 
@@ -71,8 +117,6 @@ function MainAppContent() {
         return <SimulatorPage defaultContractId={selectedContractId} />;
       case 'audit':
         return <AuditPage />;
-      case 'rag':
-        return <StatutoryRAGPage />;
       case 'settings':
         return <SettingsPage />;
       default:
@@ -88,8 +132,7 @@ function MainAppContent() {
       case 'rules': return 'Structured Legal IR Repository';
       case 'simulator': return 'What-If Financial Simulator';
       case 'audit': return 'Audit & Traceability Hub';
-      case 'rag': return 'Statutory Legal Reference RAG';
-      case 'settings': return 'System Settings & LLM Configuration';
+      case 'settings': return 'Account & Application Settings';
       default: return 'LAWGIC Dashboard';
     }
   };

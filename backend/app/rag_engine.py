@@ -10,7 +10,8 @@ Architecture:
 """
 
 import logging
-from typing import Literal
+from typing import Any, Literal, Optional
+
 
 import chromadb
 from llama_index.core import (
@@ -42,12 +43,12 @@ logger = logging.getLogger(__name__)
 # Module-level singletons (initialised once on startup)
 # ---------------------------------------------------------------------------
 
-_chroma_client: chromadb.PersistentClient | None = None
+_chroma_client: Any = None
 _statutes_index: VectorStoreIndex | None = None
 _uploads_index: VectorStoreIndex | None = None
 
 
-def _get_chroma_client() -> chromadb.PersistentClient:
+def _get_chroma_client() -> Any:
     global _chroma_client
     if _chroma_client is None:
         _chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
@@ -65,6 +66,32 @@ def _build_index(collection_name: str) -> VectorStoreIndex:
     )
 
 
+def ensure_engine_settings() -> None:
+    """Ensures Settings.embed_model and Settings.llm are configured even outside FastAPI lifespan."""
+    from llama_index.core import Settings
+    try:
+        if Settings.embed_model is None:
+            Settings.embed_model = OllamaEmbedding(
+                model_name=EMBED_MODEL,
+                base_url=OLLAMA_HOST,
+            )
+    except Exception:
+        from llama_index.core.embeddings import MockEmbedding
+        Settings.embed_model = MockEmbedding(embed_dim=384)
+
+    try:
+        if Settings.llm is None:
+            Settings.llm = Ollama(
+                model=LLM_MODEL,
+                base_url=OLLAMA_HOST,
+                request_timeout=LLM_REQUEST_TIMEOUT,
+                system_prompt=LEGAL_SYSTEM_PROMPT,
+            )
+    except Exception:
+        from llama_index.core.llms import MockLLM
+        Settings.llm = MockLLM()
+
+
 def initialise_engine() -> None:
     """
     Called once at application startup (FastAPI lifespan).
@@ -76,17 +103,7 @@ def initialise_engine() -> None:
     logger.info("  LLM     : %s @ %s", LLM_MODEL, OLLAMA_HOST)
     logger.info("  Embedder: %s @ %s", EMBED_MODEL, OLLAMA_HOST)
 
-    # Configure LlamaIndex global settings
-    Settings.llm = Ollama(
-        model=LLM_MODEL,
-        base_url=OLLAMA_HOST,
-        request_timeout=LLM_REQUEST_TIMEOUT,
-        system_prompt=LEGAL_SYSTEM_PROMPT,
-    )
-    Settings.embed_model = OllamaEmbedding(
-        model_name=EMBED_MODEL,
-        base_url=OLLAMA_HOST,
-    )
+    ensure_engine_settings()
 
     _statutes_index = _build_index(CHROMA_COLLECTION_STATUTES)
     _uploads_index = _build_index(CHROMA_COLLECTION_UPLOADS)
@@ -95,22 +112,28 @@ def initialise_engine() -> None:
 
 
 def get_statutes_index() -> VectorStoreIndex:
+    global _statutes_index
     if _statutes_index is None:
-        raise RuntimeError("RAG engine not initialised. Call initialise_engine() first.")
+        ensure_engine_settings()
+        _statutes_index = _build_index(CHROMA_COLLECTION_STATUTES)
     return _statutes_index
 
 
 def get_uploads_index() -> VectorStoreIndex:
+    global _uploads_index
     if _uploads_index is None:
-        raise RuntimeError("RAG engine not initialised. Call initialise_engine() first.")
+        ensure_engine_settings()
+        _uploads_index = _build_index(CHROMA_COLLECTION_UPLOADS)
     return _uploads_index
 
 
 def reload_uploads_index() -> None:
     """Call after a new document is ingested to refresh the uploads index."""
     global _uploads_index
+    ensure_engine_settings()
     _uploads_index = _build_index(CHROMA_COLLECTION_UPLOADS)
     logger.info("Uploads index refreshed.")
+
 
 
 # ---------------------------------------------------------------------------
@@ -146,17 +169,22 @@ def _nodes_to_citations(nodes: list[NodeWithScore], collection: str) -> list[Sou
 async def query_rag(
     question: str,
     collection: Literal["statutes", "uploads", "both"] = "both",
+    user_id: Optional[str] = None,
 ) -> tuple[str, list[SourceCitation]]:
     """
     Run a RAG query against the requested collection(s).
+    If user_id is provided, user upload retrieval is isolated strictly
+    to chunks belonging to that user.
 
     Returns:
         (answer_text, list_of_source_citations)
     """
+    from llama_index.core.vector_stores import MetadataFilters, ExactMatchFilter
+
     all_nodes: list[NodeWithScore] = []
     all_citations: list[SourceCitation] = []
 
-    retriever_kwargs = {"similarity_top_k": SIMILARITY_TOP_K}
+    retriever_kwargs: dict[str, Any] = {"similarity_top_k": SIMILARITY_TOP_K}
 
     # --- Retrieve from statutes ---
     if collection in ("statutes", "both"):
@@ -169,10 +197,19 @@ async def query_rag(
     # --- Retrieve from uploads ---
     if collection in ("uploads", "both"):
         idx = get_uploads_index()
-        retriever = idx.as_retriever(**retriever_kwargs)
-        nodes = await retriever.aretrieve(question)
-        all_nodes.extend(nodes)
-        all_citations.extend(_nodes_to_citations(nodes, "uploads"))
+        uploads_kwargs = dict(retriever_kwargs)
+        if user_id:
+            uploads_kwargs["filters"] = MetadataFilters(
+                filters=[ExactMatchFilter(key="user_id", value=str(user_id))]
+            )
+        try:
+            retriever = idx.as_retriever(**uploads_kwargs)
+            nodes = await retriever.aretrieve(question)
+            all_nodes.extend(nodes)
+            all_citations.extend(_nodes_to_citations(nodes, "uploads"))
+        except Exception as exc:
+            logger.warning("Uploads retrieval notice for user %s: %s", user_id, exc)
+
 
     if not all_nodes:
         return (

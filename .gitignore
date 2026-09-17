@@ -28,6 +28,5 @@ backend/chroma_db/
 *.log
 
 # Uploads
-backend/uploads/*.pdf
-backend/uploads/*.docx
+backend/uploads/*
 !backend/uploads/ABC_Tech_Supplier_Agreement.txt

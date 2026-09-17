@@ -6,11 +6,13 @@ Copy .env.example → .env and override as needed.
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 DATA_DIR = BASE_DIR / "data"
 STATUTES_DIR = DATA_DIR / "statutes"
 UPLOADS_DIR = DATA_DIR / "uploads"
@@ -51,10 +53,13 @@ CHROMA_COLLECTION_UPLOADS: str = "lawgic_uploads"
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
-CORS_ORIGINS: list[str] = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,https://lawgic-phi.vercel.app",
-).split(",")
+_cors_defaults = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173,https://lawgic-phi.vercel.app"
+CORS_ORIGINS: list[str] = [
+    origin.strip() for origin in os.getenv("CORS_ORIGINS", _cors_defaults).split(",") if origin.strip()
+]
+_frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+if _frontend_url and _frontend_url not in CORS_ORIGINS:
+    CORS_ORIGINS.append(_frontend_url)
 
 MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
 
